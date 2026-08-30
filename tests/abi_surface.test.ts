@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -27,7 +28,16 @@ const modulePath = join(repoRoot, "build", "surgext-webvst.wasm");
 // --- Package identity (must match src/surge_webvst.h) ---------------------------
 const ABI_ID = "prometheos-vst3-wasm-1";
 const PACKAGE_ID = "org.prometheos.webvst.surgext";
-const SURGE_PIN = "2644c613fb729cf2ce924c39dc75cf6a61ee9324";
+/**
+ * Read from the submodule, never restated as a literal: the class UID is a
+ * function of this pin, so a hardcoded copy here could keep the UID assertion
+ * green against a stale pin after a Surge bump. tests/provenance.test.ts owns
+ * asserting that this HEAD *is* the intended commit.
+ */
+const SURGE_PIN = execFileSync("git", ["rev-parse", "HEAD"], {
+  cwd: join(repoRoot, "vendor", "surge"),
+  encoding: "utf8",
+}).trim();
 const CLASS_NAME = "Surge XT";
 const CLASS_VENDOR = "Surge Synth Team";
 const PVST_KIND_INSTRUMENT = 1;
@@ -203,6 +213,24 @@ function paramTitle(abi: AbiInstance, index: number): string {
   );
 }
 
+/**
+ * A continuous (step count 0), automatable parameter -- the kind whose exact
+ * normalized value survives a set/get and a state round trip. Surge's first
+ * such parameter is used so the choice is deterministic.
+ */
+function continuousParameter(abi: AbiInstance): number {
+  const count = abi.fn("pvst_class_param_count")(0) >>> 0;
+  for (let index = 0; index < count; index += 1) {
+    if (
+      (abi.fn("pvst_class_param_step_count")(0, index) >>> 0) === 0 &&
+      ((abi.fn("pvst_class_param_flags")(0, index) >>> 0) & PVST_PARAMETER_AUTOMATABLE) !== 0
+    ) {
+      return index;
+    }
+  }
+  throw new Error("the module reports no continuous automatable parameter");
+}
+
 function paramValueText(abi: AbiInstance, index: number, normalized: number): string {
   const size = abi.fn("pvst_class_param_value_text_size")(0, index, normalized) >>> 0;
   return readAbiString(
@@ -262,6 +290,39 @@ describe("Surge XT WebVST ABI v1 surface", () => {
       ),
     ).toEqual([]);
     expect(exported.some((entry) => entry.name === "memory" && entry.kind === "memory")).toBe(true);
+  });
+
+  /**
+   * The GPLv3 binary this repository publishes must not carry the absolute
+   * paths of whoever built it. tests/provenance.test.ts enforces that for
+   * tracked text files but never opens the .wasm, and two mechanisms leak into
+   * it: `__FILE__` in Surge's effect sources, and CMAKE_INSTALL_PREFIX baked
+   * into Surge's and sst-plugininfra's configure_file()d sources. Because
+   * scripts/build.ts works in a temporary directory, a leaked build path also
+   * made consecutive builds by the same developer differ.
+   * cmake/SurgeWebVst.cmake closes both; this keeps them closed.
+   */
+  it("bakes no absolute developer path into the published module", () => {
+    const image = readFileSync(modulePath).toString("latin1");
+
+    // A Windows absolute path: a drive letter not itself preceded by a letter
+    // (so URL schemes such as "https://" are not mistaken for one), then a
+    // separator, then printable path characters. The separator class is built
+    // from a char code so this file contains no backslash literal of its own.
+    const separators = `[/${String.fromCharCode(92).repeat(2)}]`;
+    const windowsPath = new RegExp(`(?<![A-Za-z])[A-Za-z]:${separators}[!-~]{4,200}`, "g");
+    const windowsPaths = [...image.matchAll(windowsPath)]
+      .map((match) => match[0]);
+    expect(windowsPaths).toEqual([]);
+
+    // POSIX home-directory shapes, assembled so these literals never appear in
+    // this file (tests/provenance.test.ts scans tracked sources for them).
+    // The macOS user-home prefix is deliberately NOT one of them: Surge's own
+    // bundled documentation legitimately shows example tuning paths under it,
+    // so it is upstream content rather than a leaked build path.
+    for (const needle of [["/", "home/"].join(""), ["/", "root/"].join(""), "AppData"]) {
+      expect(image.includes(needle), `module contains ${JSON.stringify(needle)}`).toBe(false);
+    }
   });
 
   it("reports ABI version 1 and exactly one class", () => {
@@ -376,18 +437,7 @@ describe("Surge XT WebVST ABI v1 surface", () => {
     expect(handle).not.toBe(0);
     try {
       const count = abi.fn("pvst_class_param_count")(0) >>> 0;
-      // Pick a continuous (step count 0) automatable parameter.
-      let target = -1;
-      for (let index = 0; index < count; index += 1) {
-        if (
-          (abi.fn("pvst_class_param_step_count")(0, index) >>> 0) === 0 &&
-          (abi.fn("pvst_class_param_flags")(0, index) >>> 0 & PVST_PARAMETER_AUTOMATABLE) !== 0
-        ) {
-          target = index;
-          break;
-        }
-      }
-      expect(target).toBeGreaterThanOrEqual(0);
+      const target = continuousParameter(abi);
 
       expect(abi.fn("pvst_param_set")(handle, target, 0.75)).toBe(PVST_OK);
       expect(abi.fn("pvst_param_get")(handle, target)).toBeCloseTo(0.75, 4);
@@ -439,11 +489,22 @@ describe("Surge XT WebVST ABI v1 surface", () => {
     }
   }, 60_000);
 
-  it("writes a valid default state and reloads it", () => {
+  it("saves and restores a changed parameter, not just a constant-sized blob", () => {
     const abi = instantiate();
     const handle = abi.fn("pvst_create")(0, 48_000, 128) >>> 0;
     expect(handle).not.toBe(0);
     try {
+      const target = continuousParameter(abi);
+      const saved = 0.25;
+      const overwritten = 0.8;
+
+      // Snapshot a patch that DIFFERS from the default. Asserting only that the
+      // state size is unchanged across a load would pass even if pvst_state_load
+      // did nothing at all: the init patch's size is constant. Task 4 feeds real
+      // preset payloads through this same path, so it has to actually load.
+      expect(abi.fn("pvst_param_set")(handle, target, saved)).toBe(PVST_OK);
+      expect(abi.fn("pvst_param_get")(handle, target)).toBeCloseTo(saved, 4);
+
       const size = abi.fn("pvst_state_size")(handle) >>> 0;
       expect(size).toBeGreaterThan(0);
       const pointer = abi.malloc(size);
@@ -455,7 +516,13 @@ describe("Surge XT WebVST ABI v1 surface", () => {
         expect(new TextDecoder().decode(state.subarray(0, 4))).toBe("sub3");
         expect(abi.fn("pvst_state_write")(handle, pointer, size - 1)).toBe(PVST_ERROR_BUFFER_TOO_SMALL);
         expect(abi.fn("pvst_state_write")(handle, 0, size)).toBe(PVST_ERROR_BUFFER_TOO_SMALL);
+
+        // Move the parameter away, then restore the snapshot over it.
+        expect(abi.fn("pvst_param_set")(handle, target, overwritten)).toBe(PVST_OK);
+        expect(abi.fn("pvst_param_get")(handle, target)).toBeCloseTo(overwritten, 4);
+
         expect(abi.fn("pvst_state_load")(handle, pointer, size)).toBe(PVST_OK);
+        expect(abi.fn("pvst_param_get")(handle, target)).toBeCloseTo(saved, 4);
         expect(abi.fn("pvst_state_size")(handle) >>> 0).toBe(size);
       } finally {
         abi.free(pointer);
@@ -470,7 +537,11 @@ describe("Surge XT WebVST ABI v1 surface", () => {
     const handle = abi.fn("pvst_create")(0, 48_000, 128) >>> 0;
     expect(handle).not.toBe(0);
     try {
+      const target = continuousParameter(abi);
+      const kept = 0.25;
+      expect(abi.fn("pvst_param_set")(handle, target, kept)).toBe(PVST_OK);
       const before = abi.fn("pvst_state_size")(handle) >>> 0;
+
       const junk = abi.malloc(64);
       expect(junk).not.toBe(0);
       try {
@@ -482,7 +553,11 @@ describe("Surge XT WebVST ABI v1 surface", () => {
       } finally {
         abi.free(junk);
       }
+
       expect(abi.fn("pvst_state_size")(handle) >>> 0).toBe(before);
+      // loadRaw resets the live patch before parsing, so a rejected blob that
+      // reached it would silently wipe the instance. It must still read back.
+      expect(abi.fn("pvst_param_get")(handle, target)).toBeCloseTo(kept, 4);
     } finally {
       abi.fn("pvst_destroy")(handle);
     }

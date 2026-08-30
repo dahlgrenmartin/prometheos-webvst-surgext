@@ -164,14 +164,46 @@ apply when it succeeds (the patch is already present). This mirrors what
 
 ## 6. Toolchain
 
-| Tool | Version |
-|---|---|
-| Emscripten | `4.0.10` |
-| CMake | `3.31.0` |
+Complete build prerequisites, with the versions that produced the artifact
+whose provenance this file records. GPL-3.0 section 6 requires the build
+scripts, the toolchain used, and installation information to be conveyed with
+the binary, so this table is the toolchain record, not a summary.
 
-Ninja is the generator. The build uses the repo's standard
-`EMSDK_PYTHON` / `EMSDK_EMSCRIPTEN_BIN` + CMake + Ninja toolchain. These exact
-versions produce the artifact whose provenance this file records.
+| Tool | Version | Why it is required |
+|---|---|---|
+| Emscripten (emsdk) | `4.0.10` | Compiles and links the WebAssembly module (`em++`, and the CMake toolchain file `cmake/Modules/Platform/Emscripten.cmake`). |
+| CMake | `3.31.0` | Configures the build graph (`CMakeLists.txt`, `cmake/SurgeWebVst.cmake`). |
+| Ninja | `1.13.2` | The generator CMake drives. |
+| Bun | `1.2.16` | Runs `scripts/build.ts`, which uses `Bun.spawnSync` / `Bun.which`. `pnpm run build` is `bun scripts/build.ts`; without Bun on PATH it fails immediately. |
+| Git | `2.55.0` | Materialises the pinned Surge checkout, initialises its submodules, and applies the three patches. |
+| Node.js + pnpm | `24.2.0` / `9.15.9` | Only for the test suites (`pnpm test`); not needed to produce the module. |
+
+Emscripten's Windows entry points run `%EMSDK_PYTHON%`, falling back to a bare
+`python`; `scripts/build.ts` resolves the interpreter the emsdk ships with and
+injects `EMSDK_PYTHON` itself, so no `emsdk_env` activation is required beyond
+having `em++` on PATH (or `EMSDK_EMSCRIPTEN_BIN` set).
+
+### Build reproducibility
+
+The build does **not** need `SOURCE_DATE_EPOCH`: Surge stamps build date, time
+and host into a generated `version.cpp`, but nothing in this package references
+those symbols, so `wasm-ld --gc-sections` drops them before they reach the
+module. Two things did leak absolute build paths into the binary and are
+suppressed in `cmake/SurgeWebVst.cmake`:
+
+- `CMAKE_INSTALL_PREFIX` is forced to `/webvst`. Surge and sst-plugininfra both
+  `configure_file()` it into generated C++ string literals, and under the
+  Emscripten toolchain its default value is the emsdk's sysroot -- an absolute
+  path inside the developer's home directory.
+- `-ffile-prefix-map` remaps the Surge checkout to `/surge`, this repository to
+  `/pkg`, and the emsdk root to `/emsdk`, so `__FILE__` (expanded through
+  sst-effects' adapter headers in Surge's effect sources) cannot embed the
+  build tree's location. Because `scripts/build.ts` works in a temporary
+  directory, that path differed between runs on the same machine and was the
+  main reason two builds were not byte-identical.
+
+`tests/abi_surface.test.ts` asserts the published module contains no absolute
+path at all.
 
 ---
 

@@ -64,6 +64,44 @@ function(surge_webvst_add_module target)
   set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
   set(ENABLE_LTO OFF CACHE BOOL "" FORCE)
 
+  # --- Keep developer paths out of the published binary --------------------
+  #
+  # This repository exists to publish a GPLv3 binary together with its
+  # corresponding source, so the binary itself must not carry the absolute
+  # paths of whoever built it. Two separate mechanisms leak them:
+  #
+  # 1. `configure_file()`d C++ sources. Both Surge (geninclude/version.cpp) and
+  #    sst-plugininfra (gen/paths_subst.cpp) bake CMAKE_INSTALL_PREFIX into a
+  #    string literal. Under the Emscripten toolchain its default value is the
+  #    emsdk's own sysroot -- an absolute path under the developer's home
+  #    directory. Nothing here is ever installed, so forcing a synthetic prefix
+  #    costs nothing and makes those literals stable and anonymous. A prefix
+  #    map cannot reach these: they are generated string data, not __FILE__.
+  set(CMAKE_INSTALL_PREFIX "/webvst" CACHE PATH "" FORCE)
+
+  # 2. `__FILE__`. Surge's effect translation units expand it through
+  #    sst-effects' adapter headers, which embeds the full path of the build
+  #    checkout -- a path that, because scripts/build.ts works in a temporary
+  #    directory, differs between runs on the same machine and is the main
+  #    reason two builds were not byte-identical. Remapping the three source
+  #    roots to short synthetic prefixes makes every embedded path stable and
+  #    developer-neutral.
+  #
+  #    Applied at directory scope BEFORE add_subdirectory rather than as
+  #    target_compile_options on surge-common and the module target alone: that
+  #    covers every target in the Surge tree (fmt, zstd, sqlite, sst-*, ...),
+  #    so a path leak from a dependency we have not audited today cannot slip
+  #    through. tests/abi_surface.test.ts asserts the built module carries no
+  #    absolute path at all.
+  add_compile_options(
+    "-ffile-prefix-map=${SURGE_WEBVST_UPSTREAM_DIR}=/surge"
+    "-ffile-prefix-map=${SURGE_WEBVST_SOURCE_DIR}=/pkg"
+  )
+  if(EMSCRIPTEN_ROOT_PATH)
+    # Covers the sysroot too: it lives under this root.
+    add_compile_options("-ffile-prefix-map=${EMSCRIPTEN_ROOT_PATH}=/emsdk")
+  endif()
+
   # Surge's own default, pinned explicitly because the ABI depends on it:
   # pvst_process chunks the caller's block into exactly this many frames.
   set(SURGE_COMPILE_BLOCK_SIZE 32 CACHE STRING "" FORCE)
