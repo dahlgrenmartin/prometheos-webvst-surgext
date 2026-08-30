@@ -361,9 +361,34 @@ default and zero steps. Their raw integer bounds span the whole `int` range, so
 the step-count computation is done in 64-bit arithmetic rather than overflowing
 a signed `int`.
 
-### Deliberate Task-2 limit
+### Host block sizes and the fixed-block FIFO
 
-`pvst_process` accepts only frame counts that are exact multiples of Surge's
-compile-time block size (`SURGE_COMPILE_BLOCK_SIZE=32`) and rejects anything
-else with `PVST_ERROR_FRAME_COUNT`. Generalising to arbitrary block sizes is a
-later task's FIFO, not a silent mis-render here.
+`pvst_process` accepts any frame count in `0..PVST_MAX_PROCESS_FRAMES` (128) per
+host call. Surge's engine still runs only on its compile-time block
+(`SURGE_COMPILE_BLOCK_SIZE=32`); the bridge is a package-owned accumulating FIFO,
+`src/fixed_block_stream.{h,cpp}` (`FixedBlockStream`). It is Surge-independent --
+it drives an injected "process exactly 32 interleaved stereo frames" operation --
+so it is unit-tested natively, without Emscripten or Surge, by
+`tests/fixed_block_stream_test.cpp`; `src/surge_webvst.cpp` supplies the real
+operation (one `SurgeSynthesizer::process()` over `synth->input`/`synth->output`).
+
+Each instance slot owns a `FixedBlockStream`. Per requested frame the FIFO reads
+one input frame (zeros for the instrument -- Surge XT here has no main input;
+`input == output` in-place calls are supported), emits one ready-output frame,
+and once 32 input frames have accumulated drives Surge for exactly one 32-frame
+block. Output therefore carries a fixed one-block (32-frame) latency: the first
+32 output frames after construction, `reset()`, or a state load are silence, and
+from then on every output frame is Surge's output for the input frame that
+entered the FIFO 32 positions earlier. The output stream is a pure function of
+the input and does not depend on how the host partitions its calls -- `[128]`,
+`[32]x4`, `[1]x128` and any ragged mix produce identical samples.
+
+The stream is cleared on `pvst_reset`, on slot reuse in `pvst_create`, and at
+the end of a successful `pvst_state_load` (so audio buffered from the previous
+patch cannot leak past the state change). `pvst_process` keeps its guards:
+`PVST_ERROR_HANDLE` for a dead handle, `PVST_ERROR_ARGUMENT` for a null
+`output`, `PVST_ERROR_FRAME_COUNT` for `frames` above the instance's
+`max_frames` or above 128, and `PVST_OK` no-op for `frames == 0`.
+`tests/variable_partition.test.ts` asserts the partition-independence on the
+built module with a factory preset held at a low note; `tests/abi_surface.test.ts`
+covers the frame-count contract.

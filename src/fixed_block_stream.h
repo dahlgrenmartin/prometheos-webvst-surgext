@@ -63,8 +63,10 @@ class FixedBlockStream
      * FIFO, invoking `processor.process32` exactly once per 32 accumulated
      * input frames. `input`, when non-null, is `frames` interleaved stereo
      * frames of effect input; a null `input` accumulates silence (the
-     * instrument case -- Surge XT here has no main input). `frames` may be any
-     * value, including 0. Never allocates, never throws.
+     * instrument case -- Surge XT here has no main input). `input == output`
+     * (in-place processing) is supported: each frame's input is read before its
+     * output is written. `frames` may be any value, including 0. Never
+     * allocates, never throws.
      */
     void process(const float *input, float *output, uint32_t frames,
                  BlockProcessor &processor) noexcept;

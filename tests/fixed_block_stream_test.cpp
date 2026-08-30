@@ -252,6 +252,61 @@ void testNullInputIsSilence()
     }
 }
 
+// A caller may hand the same buffer as input and output (in-place processing).
+// Rendering a known partition that way must produce exactly the same stream as
+// rendering it with separate buffers, and the processor must still see whole,
+// correctly ordered input blocks.
+void testInPlaceAliasing()
+{
+    const std::vector<uint32_t> partition = {7, 13, 1, 64, 3, 128};
+
+    std::vector<float> monotonic;
+    fillMonotonicInput(monotonic, kTotal);
+
+    // Separate in/out buffers.
+    EncodingProcessor sep;
+    std::vector<float> separate(static_cast<size_t>(kTotal) * 2u, -1.0f);
+    {
+        surge_webvst::FixedBlockStream stream;
+        uint32_t done = 0;
+        size_t step = 0;
+        while (done < kTotal)
+        {
+            uint32_t want = partition[step % partition.size()];
+            if (want > kTotal - done)
+                want = kTotal - done;
+            stream.process(monotonic.data() + static_cast<size_t>(done) * 2u,
+                           separate.data() + static_cast<size_t>(done) * 2u, want, sep);
+            done += want;
+            ++step;
+        }
+    }
+
+    // In-place: seed the buffer with the same input, then process buf -> buf.
+    EncodingProcessor inplace;
+    std::vector<float> aliased = monotonic;
+    {
+        surge_webvst::FixedBlockStream stream;
+        uint32_t done = 0;
+        size_t step = 0;
+        while (done < kTotal)
+        {
+            uint32_t want = partition[step % partition.size()];
+            if (want > kTotal - done)
+                want = kTotal - done;
+            float *p = aliased.data() + static_cast<size_t>(done) * 2u;
+            stream.process(p, p, want, inplace);
+            done += want;
+            ++step;
+        }
+    }
+
+    CHECK(inplace.contiguous);
+    CHECK(inplace.blocks == sep.blocks);
+    CHECK(inplace.blocks == kTotal / kBlock);
+    CHECK(aliased == separate);
+}
+
 } // namespace
 
 int main()
@@ -261,6 +316,7 @@ int main()
     testReset();
     testZeroFrames();
     testNullInputIsSilence();
+    testInPlaceAliasing();
 
     if (g_failures == 0)
     {

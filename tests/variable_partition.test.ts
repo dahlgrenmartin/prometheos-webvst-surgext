@@ -14,9 +14,9 @@ import { fileURLToPath } from "node:url";
  *
  * This suite proves that on the real built module. It loads factory preset
  * category 0 / preset 0, holds one very low note continuously, and renders the
- * same span three ways -- all-32-frame calls, one Buzz-like ragged partition
- * (`[7,13,1,64,3,128]` repeating), and a single whole-span call -- then asserts
- * the three output streams are byte-identical sample-for-sample once the
+ * same span three ways -- exact 32-frame calls, one Buzz-like ragged partition
+ * (`[7,13,1,64,3,128]` repeating), and the largest legal 128-frame call -- then
+ * asserts the three output streams are byte-identical sample-for-sample once the
  * documented, fixed 32-frame FIFO latency is skipped. No onset masking, no
  * click/fade filter: only the first 32 frames (the latency the FIFO is defined
  * to introduce) are excluded.
@@ -239,46 +239,111 @@ beforeAll(async () => {
 describe("Surge XT WebVST arbitrary host-block partitioning", () => {
   it("drives factory preset 0/0 identically for every host-call partition", () => {
     const abi = instantiate();
-    const { payload } = firstFactoryPresetPayload();
+    const { category, preset, payload } = firstFactoryPresetPayload();
+    // eslint-disable-next-line no-console
+    console.log(`variable_partition: factory preset "${category}/${preset}", ${payload.length}-byte payload`);
 
     // Three independent voices from identical fresh state -- the engine is
     // deterministic here (clock shim returns 0, so Surge's per-instance
     // clock-seeded RNG seeds identically; randomness shim returns zeros) -- each
     // rendered with a different host-call partition.
-    const blocks32 = render(abi, newVoice(abi, payload), BLOCKS_32_PARTITION);
-    const ragged = render(abi, newVoice(abi, payload), RAGGED_PARTITION);
-    const maxBlocks = render(abi, newVoice(abi, payload), MAX_BLOCK_PARTITION);
+    const h32 = newVoice(abi, payload);
+    const hRagged = newVoice(abi, payload);
+    const hMax = newVoice(abi, payload);
+    try {
+      const blocks32 = render(abi, h32, BLOCKS_32_PARTITION);
+      const ragged = render(abi, hRagged, RAGGED_PARTITION);
+      const maxBlocks = render(abi, hMax, MAX_BLOCK_PARTITION);
 
-    const latency = FIFO_LATENCY_FRAMES * CHANNELS;
+      const latency = FIFO_LATENCY_FRAMES * CHANNELS;
 
-    // The documented initial latency: the first 32 output frames are silence in
-    // every partition (the FIFO has not driven a block yet). This is the ONLY
-    // region excluded from the sample-for-sample comparison below.
-    for (let i = 0; i < latency; i += 1) {
-      expect(blocks32[i], `blocks32 latency sample ${i}`).toBe(0);
-      expect(ragged[i], `ragged latency sample ${i}`).toBe(0);
-      expect(maxBlocks[i], `maxBlocks latency sample ${i}`).toBe(0);
-    }
-
-    // The preset actually makes sound past the latency window, so the equality
-    // below is a real comparison and not silence-against-silence.
-    let peak = 0;
-    for (let i = latency; i < blocks32.length; i += 1) peak = Math.max(peak, Math.abs(blocks32[i]));
-    expect(peak, "post-latency peak of the 32-frame reference render").toBeGreaterThan(1e-4);
-
-    // Sample-for-sample identity across every partition, onset transient
-    // included -- nothing masked, nothing faded. Only the 32-frame latency
-    // prefix skipped above is excluded.
-    const firstDiff = (candidate: Float32Array, label: string) => {
-      for (let i = latency; i < blocks32.length; i += 1) {
-        if (!Object.is(candidate[i], blocks32[i])) {
-          return `${label}: first divergence at sample ${i} (frame ${i >> 1}): ` +
-            `reference ${blocks32[i]} vs candidate ${candidate[i]}`;
-        }
+      // The documented initial latency: the first 32 output frames are silence in
+      // every partition (the FIFO has not driven a block yet). This is the ONLY
+      // region excluded from the sample-for-sample comparison below.
+      for (let i = 0; i < latency; i += 1) {
+        expect(blocks32[i], `blocks32 latency sample ${i}`).toBe(0);
+        expect(ragged[i], `ragged latency sample ${i}`).toBe(0);
+        expect(maxBlocks[i], `maxBlocks latency sample ${i}`).toBe(0);
       }
-      return "";
+
+      // The preset actually makes sound past the latency window, so the equality
+      // below is a real comparison and not silence-against-silence.
+      let peak = 0;
+      for (let i = latency; i < blocks32.length; i += 1) peak = Math.max(peak, Math.abs(blocks32[i]));
+      expect(peak, "post-latency peak of the 32-frame reference render").toBeGreaterThan(1e-4);
+
+      // Sample-for-sample identity across every partition, onset transient
+      // included -- nothing masked, nothing faded. Only the 32-frame latency
+      // prefix skipped above is excluded.
+      const firstDiff = (candidate: Float32Array, label: string) => {
+        for (let i = latency; i < blocks32.length; i += 1) {
+          if (!Object.is(candidate[i], blocks32[i])) {
+            return `${label}: first divergence at sample ${i} (frame ${i >> 1}): ` +
+              `reference ${blocks32[i]} vs candidate ${candidate[i]}`;
+          }
+        }
+        return "";
+      };
+      expect(firstDiff(ragged, "ragged [7,13,1,64,3,128] repeating"), "ragged vs 32-frame calls").toBe("");
+      expect(firstDiff(maxBlocks, "max 128-frame blocks"), "128-frame blocks vs 32-frame calls").toBe("");
+    } finally {
+      for (const handle of [h32, hRagged, hMax]) abi.fn("pvst_destroy")(handle);
+    }
+  }, 60_000);
+
+  it("re-primes the FIFO on state load and on reset so pre-change audio cannot leak", () => {
+    const abi = instantiate();
+    const { payload } = firstFactoryPresetPayload();
+
+    const handle = abi.fn("pvst_create")(0, SAMPLE_RATE, MAX_FRAMES) >>> 0;
+    expect(handle, "pvst_create").not.toBe(0);
+    const scratch = abi.malloc(MAX_FRAMES * CHANNELS * 4);
+    expect(scratch, "malloc(scratch)").not.toBe(0);
+
+    const process = (frames: number) => {
+      expect(abi.fn("pvst_process")(handle, 0, scratch, frames), `pvst_process(${frames})`).toBe(PVST_OK);
+      return Array.from(new Float32Array(abi.memory.buffer, scratch, frames * CHANNELS));
     };
-    expect(firstDiff(ragged, "ragged [7,13,1,64,3,128] repeating"), "ragged vs 32-frame calls").toBe("");
-    expect(firstDiff(maxBlocks, "max 128-frame blocks"), "128-frame blocks vs 32-frame calls").toBe("");
+    const peakOf = (buf: number[]) => buf.reduce((m, s) => Math.max(m, Math.abs(s)), 0);
+    const loadState = () => {
+      const p = abi.malloc(payload.length);
+      expect(p, "malloc(state)").not.toBe(0);
+      try {
+        abi.bytes().set(payload, p);
+        expect(abi.fn("pvst_state_load")(handle, p, payload.length), "pvst_state_load").toBe(PVST_OK);
+      } finally {
+        abi.free(p);
+      }
+    };
+
+    try {
+      // Fill the FIFO with real buffered tail audio (its ready block is non-zero).
+      expect(abi.fn("pvst_note_on")(handle, 60, 1.0), "pvst_note_on").toBe(PVST_OK);
+      let tail: number[] = [];
+      for (let i = 0; i < 8; i += 1) tail = process(128);
+      expect(peakOf(tail), "FIFO holds real buffered audio before the state change").toBeGreaterThan(1e-4);
+
+      // A successful state load must clear the stream: the next 32 output frames
+      // are the FIFO's silent re-prime, NOT the previous patch's buffered tail.
+      loadState();
+      expect(
+        process(FIFO_LATENCY_FRAMES).every((s) => s === 0),
+        "32 frames after pvst_state_load are the re-primed FIFO (exact silence)",
+      ).toBe(true);
+
+      // Same guarantee for pvst_reset. loadRaw stopped the note, so start a new
+      // one and refill the FIFO with audio first.
+      expect(abi.fn("pvst_note_on")(handle, 60, 1.0), "pvst_note_on (post-load)").toBe(PVST_OK);
+      for (let i = 0; i < 8; i += 1) tail = process(128);
+      expect(peakOf(tail), "FIFO refilled with audio before reset").toBeGreaterThan(1e-4);
+      expect(abi.fn("pvst_reset")(handle), "pvst_reset").toBe(PVST_OK);
+      expect(
+        process(FIFO_LATENCY_FRAMES).every((s) => s === 0),
+        "32 frames after pvst_reset are the re-primed FIFO (exact silence)",
+      ).toBe(true);
+    } finally {
+      abi.free(scratch);
+      abi.fn("pvst_destroy")(handle);
+    }
   }, 60_000);
 });
