@@ -1,0 +1,43 @@
+Surge XT - upstream provenance and license notice
+=================================================
+
+This Prometheos WebVST package embeds and conveys Surge XT, the hybrid
+synthesizer developed by the Surge Synth Team.
+
+  Upstream:        https://github.com/surge-synthesizer/surge.git
+  Pinned commit:   2644c613fb729cf2ce924c39dc75cf6a61ee9324
+  Submodule path:  vendor/surge
+  Copyright:       2018-2025 the Surge Synthesizer Team and contributors, as
+                   recorded in the upstream AUTHORS file and Git history
+                   (notably "surge  Copyright (C) 2018  Claes Johanson").
+
+Surge XT is licensed under the GNU General Public License, version 3 or later
+(GPL-3.0-or-later). The combined work distributed from this repository - the
+Surge XT engine plus the thin C-ABI host that adapts it to the Prometheos
+WebVST ABI - is therefore conveyed under GPLv3 as a whole. MIT (the WebVST
+SDK's license) permits this; GPLv3 requires it.
+
+The complete corresponding source is this repository together with its pinned
+submodules. See PROVENANCE.md for the exact upstream commit, the three local
+build patches (with their SHA-256), the toolchain versions, and the command
+sequence that reproduces the module. The factory presets bundled here as
+presets/<category>.bin are the unmodified `sub3` state blobs of the upstream
+resources/data/patches_factory tree at the pinned commit, with only the
+60-byte VST2 .fxp wrapper removed (see scripts/pack-presets.ts).
+
+Verbatim header of vendor/surge/LICENSE
+---------------------------------------
+
+GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <http://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+The full GPL-3.0 license text that accompanies this package is in
+licenses/GPL-3.0.txt (the canonical Free Software Foundation text; upstream
+ships an equivalent copy at vendor/surge/LICENSE).
+
+No trademark claim is made about the ".webvst" suffix or the "Surge" name; a
+naming/trademark review remains required before any public release or tag.
