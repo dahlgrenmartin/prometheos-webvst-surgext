@@ -130,7 +130,10 @@ function(surge_webvst_add_module target)
     target_compile_options(pffft PRIVATE "-Wno-error=#warnings")
   endif()
 
-  add_executable(${target} "${SURGE_WEBVST_SOURCE_DIR}/src/surge_webvst.cpp")
+  add_executable(${target}
+    "${SURGE_WEBVST_SOURCE_DIR}/src/surge_webvst.cpp"
+    "${SURGE_WEBVST_SOURCE_DIR}/src/fixed_block_stream.cpp"
+  )
   target_link_libraries(${target} PRIVATE surge::surge-common)
   target_include_directories(${target} PRIVATE
     "${SURGE_WEBVST_SDK_DIR}/include"

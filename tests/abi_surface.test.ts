@@ -454,7 +454,7 @@ describe("Surge XT WebVST ABI v1 surface", () => {
     }
   });
 
-  it("processes 32-frame multiples and produces audio after a note-on", () => {
+  it("processes arbitrary host block sizes and produces audio after a note-on", () => {
     const abi = instantiate();
     const handle = abi.fn("pvst_create")(0, 48_000, 128) >>> 0;
     expect(handle).not.toBe(0);
@@ -465,7 +465,13 @@ describe("Surge XT WebVST ABI v1 surface", () => {
       // input == NULL is the normal instrument case: silence.
       expect(abi.fn("pvst_process")(handle, 0, output, 0)).toBe(PVST_OK);
       expect(abi.fn("pvst_process")(handle, 0, output, frames)).toBe(PVST_OK);
-      expect(abi.fn("pvst_process")(handle, 0, output, 33)).toBe(PVST_ERROR_FRAME_COUNT);
+      // Any 1..128 span is accepted now: the fixed-block FIFO adapts them to
+      // Surge's 32-frame engine block.
+      expect(abi.fn("pvst_process")(handle, 0, output, 1)).toBe(PVST_OK);
+      expect(abi.fn("pvst_process")(handle, 0, output, 31)).toBe(PVST_OK);
+      expect(abi.fn("pvst_process")(handle, 0, output, 33)).toBe(PVST_OK);
+      expect(abi.fn("pvst_process")(handle, 0, output, 127)).toBe(PVST_OK);
+      // Still capped: 160 > PVST_MAX_PROCESS_FRAMES (128).
       expect(abi.fn("pvst_process")(handle, 0, output, 160)).toBe(PVST_ERROR_FRAME_COUNT);
       expect(abi.fn("pvst_process")(handle, 0, 0, frames)).toBe(PVST_ERROR_ARGUMENT);
       expect(abi.fn("pvst_process")(0, 0, output, frames)).toBe(PVST_ERROR_HANDLE);

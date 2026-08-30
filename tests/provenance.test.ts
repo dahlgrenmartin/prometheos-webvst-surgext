@@ -95,7 +95,15 @@ const TEXT_BASENAMES = new Set([".gitmodules", ".gitattributes", "CMakeLists.txt
 
 function collectTrackedTextFiles(dir: string, acc: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === ".git" || entry.name === "node_modules" || entry.name === "vendor") {
+    if (
+      entry.name === ".git" ||
+      entry.name === "node_modules" ||
+      entry.name === "vendor" ||
+      // git-ignored: scripts/build.ts writes the .wasm here and `cmake -B
+      // build/native` writes CMake's own path-laden scaffolding here. This scan
+      // is for *tracked* build files; generated output under build/ is not one.
+      entry.name === "build"
+    ) {
       continue;
     }
     const full = join(dir, entry.name);

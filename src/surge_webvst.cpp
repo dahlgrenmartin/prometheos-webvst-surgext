@@ -12,6 +12,8 @@
 #include "SurgeStorage.h"
 #include "SurgeSynthesizer.h"
 
+#include "fixed_block_stream.h"
+
 namespace
 {
 
@@ -64,6 +66,40 @@ struct Slot
     SurgeSynthesizer *synth = nullptr;
     uint32_t generation = 0;
     uint32_t maxFrames = 0;
+    // Bridges arbitrary 0..maxFrames host blocks to Surge's fixed 32-frame
+    // engine block. Per-instance: its buffered audio and cursors must not bleed
+    // between instances that reuse this slot.
+    FixedBlockStream stream{};
+};
+
+/**
+ * The real 32-frame operation the FIFO drives: one SurgeSynthesizer::process()
+ * over synth->input / synth->output. Surge XT is an instrument with no main
+ * input here, but the FIFO still hands a full 32-frame input block (zeros for a
+ * null host input), so this always copies 32 whole frames in and out. Stack
+ * allocated per pvst_process call; holds no state of its own.
+ */
+struct SurgeBlockProcessor final : BlockProcessor
+{
+    SurgeSynthesizer *synth;
+
+    explicit SurgeBlockProcessor(SurgeSynthesizer *s) noexcept : synth(s) {}
+
+    void process32(const float *input, float *output) noexcept override
+    {
+        constexpr int kBlock = static_cast<int>(FixedBlockStream::kBlockFrames);
+        for (int i = 0; i < kBlock; ++i)
+        {
+            synth->input[0][i] = input[i * 2];
+            synth->input[1][i] = input[i * 2 + 1];
+        }
+        synth->process();
+        for (int i = 0; i < kBlock; ++i)
+        {
+            output[i * 2] = synth->output[0][i];
+            output[i * 2 + 1] = synth->output[1][i];
+        }
+    }
 };
 
 std::array<Slot, kMaxInstances> &slots()
@@ -392,6 +428,9 @@ uint32_t pvst_create(uint32_t class_index, double sample_rate, uint32_t max_fram
 
     table[slotIndex].synth = synth;
     table[slotIndex].maxFrames = max_frames;
+    // A recycled slot still holds the previous instance's buffered audio; start
+    // this instance from an empty FIFO.
+    table[slotIndex].stream.reset();
     table[slotIndex].generation = (table[slotIndex].generation + 1u) & kGenerationMask;
     return makeHandle(slotIndex, table[slotIndex].generation);
 }
@@ -412,15 +451,18 @@ int32_t pvst_reset(uint32_t handle)
     if (slot == nullptr)
         return PVST_ERROR_HANDLE;
     slot->synth->allNotesOff();
+    slot->stream.reset();
     return PVST_OK;
 }
 
 /**
- * Surge's engine runs on a compile-time fixed block (SURGE_COMPILE_BLOCK_SIZE,
- * 32), so this loops whole Surge blocks over the caller's buffer. Frame counts
- * that are not a multiple of that block are rejected rather than silently
- * mis-rendered; a later task adds the FIFO that generalises this to arbitrary
- * block sizes.
+ * Surge's engine runs on a compile-time fixed 32-frame block
+ * (SURGE_COMPILE_BLOCK_SIZE). The host may ask for any 0..maxFrames span, so
+ * every call is routed through the Slot's FixedBlockStream: it accumulates the
+ * request into whole 32-frame blocks, drives Surge exactly once per block, and
+ * returns a continuous output stream delayed by one fixed 32-frame block. The
+ * result is a pure function of the input and is independent of how the host
+ * partitions its calls -- see src/fixed_block_stream.h.
  */
 int32_t pvst_process(uint32_t handle, const float *input, float *output, uint32_t frames)
 {
@@ -431,33 +473,11 @@ int32_t pvst_process(uint32_t handle, const float *input, float *output, uint32_
         return PVST_ERROR_ARGUMENT;
     if (frames > slot->maxFrames || frames > PVST_MAX_PROCESS_FRAMES)
         return PVST_ERROR_FRAME_COUNT;
+    if (frames == 0u)
+        return PVST_OK;
 
-    SurgeSynthesizer *synth = slot->synth;
-    const int blockSize = synth->getBlockSize();
-    if (blockSize <= 0)
-        return PVST_ERROR_PLUGIN;
-    if (frames % static_cast<uint32_t>(blockSize) != 0u)
-        return PVST_ERROR_FRAME_COUNT;
-
-    uint32_t done = 0u;
-    while (done < frames)
-    {
-        for (int i = 0; i < blockSize; ++i)
-        {
-            const uint32_t frame = done + static_cast<uint32_t>(i);
-            // A null input is silence: the normal instrument case.
-            synth->input[0][i] = input != nullptr ? input[frame * 2u] : 0.0f;
-            synth->input[1][i] = input != nullptr ? input[frame * 2u + 1u] : 0.0f;
-        }
-        synth->process();
-        for (int i = 0; i < blockSize; ++i)
-        {
-            const uint32_t frame = done + static_cast<uint32_t>(i);
-            output[frame * 2u] = synth->output[0][i];
-            output[frame * 2u + 1u] = synth->output[1][i];
-        }
-        done += static_cast<uint32_t>(blockSize);
-    }
+    SurgeBlockProcessor processor{slot->synth};
+    slot->stream.process(input, output, frames, processor);
     return PVST_OK;
 }
 
@@ -592,6 +612,9 @@ int32_t pvst_state_load(uint32_t handle, const uint8_t *src, uint32_t size)
     if (std::memcmp(src, "sub3", 4) != 0)
         return PVST_ERROR_ARGUMENT;
     slot->synth->loadRaw(src, static_cast<int>(size), false);
+    // Drop any audio buffered from the pre-preset patch so it cannot leak past
+    // the state change.
+    slot->stream.reset();
     return PVST_OK;
 }
 
