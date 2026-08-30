@@ -1,0 +1,6 @@
+[submodule "vendor/surge"]
+	path = vendor/surge
+	url = https://github.com/surge-synthesizer/surge.git
+[submodule "vendor/webvst-sdk"]
+	path = vendor/webvst-sdk
+	url = ../prometheos-vst3-wasm-sdk

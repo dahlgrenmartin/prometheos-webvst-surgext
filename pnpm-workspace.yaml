@@ -1,0 +1,8 @@
+# Standalone workspace root.
+#
+# This repository is developed inside the `prometheos-dev` meta-checkout, which
+# has its own pnpm-workspace.yaml one level up. pnpm uses the nearest workspace
+# root going up, so this file anchors pnpm HERE: `pnpm install` resolves only
+# this package's dependencies and writes this repository's own lockfile,
+# independent of the outer workspace.
+packages: []

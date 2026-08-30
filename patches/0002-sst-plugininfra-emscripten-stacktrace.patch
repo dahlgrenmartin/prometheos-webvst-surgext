@@ -1,0 +1,33 @@
+diff --git a/src/misc_linux.cpp b/src/misc_linux.cpp
+index a9b5524..03dd4e8 100644
+--- a/src/misc_linux.cpp
++++ b/src/misc_linux.cpp
+@@ -16,7 +16,9 @@
+ 
+ #include <stdio.h>
+ #include <cstdlib>
++#ifndef __EMSCRIPTEN__
+ #include <execinfo.h>
++#endif
+ #include <string>
+ #include <sstream>
+ #include <iomanip>
+@@ -38,6 +40,10 @@ std::string toOSCase(const std::string &text) { return text; }
+ 
+ std::string stackTraceToString(int depth)
+ {
++#ifdef __EMSCRIPTEN__
++    (void)depth;
++    return "-------- Stack Trace (unavailable on Emscripten) --------\n";
++#else
+     void *callstack[128];
+     int i, frames = backtrace(callstack, 128);
+     char **strs = backtrace_symbols(callstack, frames);
+@@ -51,6 +57,7 @@ std::string stackTraceToString(int depth)
+     }
+     free(strs);
+     return oss.str();
++#endif
+ }
+ 
+ std::string getLastSystemError() { return std::string(strerror(errno)); }

@@ -1,0 +1,27 @@
+diff --git a/src/paths_linux.cpp b/src/paths_linux.cpp
+index 9e37e5e..23a32c3 100644
+--- a/src/paths_linux.cpp
++++ b/src/paths_linux.cpp
+@@ -36,6 +36,14 @@ fs::path homePath()
+ 
+ fs::path sharedLibraryBinaryPath()
+ {
++#ifdef __EMSCRIPTEN__
++    // No dynamic linker, so no real "where is this .so installed" answer --
++    // dladdr() always fails here. Callers only use this to look for a
++    // portable data folder next to the binary, which doesn't apply to a
++    // standalone wasm module either way; a fixed placeholder lets that
++    // lookup fail closed (not found) instead of throwing.
++    return fs::path{"/surgext"};
++#else
+     Dl_info info;
+     if (!dladdr(reinterpret_cast<const void *>(&sharedLibraryBinaryPath), &info) ||
+         !info.dli_fname[0])
+@@ -44,6 +52,7 @@ fs::path sharedLibraryBinaryPath()
+         throw std::runtime_error{"Failed to retrieve shared object file name"};
+     }
+     return fs::path{info.dli_fname};
++#endif
+ }
+ 
+ /*

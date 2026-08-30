@@ -1,0 +1,5 @@
+# The upstream patch files under patches/ are byte-for-byte provenance
+# artifacts: their SHA-256 is recorded in PROVENANCE.md and verified by
+# tests/provenance.test.ts. Never let Git normalize their line endings, on any
+# platform, or the recorded hashes stop matching.
+patches/*.patch -text

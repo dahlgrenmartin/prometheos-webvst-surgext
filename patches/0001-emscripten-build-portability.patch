@@ -1,0 +1,41 @@
+diff --git a/src/common/CMakeLists.txt b/src/common/CMakeLists.txt
+index 59ebd2ee..85613edb 100644
+--- a/src/common/CMakeLists.txt
++++ b/src/common/CMakeLists.txt
+@@ -284,7 +284,7 @@ if(APPLE)
+ elseif(UNIX)
+   target_compile_definitions(${PROJECT_NAME} PUBLIC LINUX=1)
+ 
+-  if(SKBUILD)
++  if(SKBUILD OR EMSCRIPTEN)
+     target_link_libraries(${PROJECT_NAME} PRIVATE
+       pthread
+     )
+@@ -344,8 +344,8 @@ endif()
+ target_sources(${PROJECT_NAME} PRIVATE ${CMAKE_BINARY_DIR}/geninclude/version.cpp)
+ 
+ # r8brain isn't cmaked but it's just one file
+-target_sources(${PROJECT_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/libs/r8brain-free-src/r8bbase.cpp)
+-target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/libs/r8brain-free-src)
++target_sources(${PROJECT_NAME} PRIVATE ${SURGE_SOURCE_DIR}/libs/r8brain-free-src/r8bbase.cpp)
++target_include_directories(${PROJECT_NAME} PRIVATE ${SURGE_SOURCE_DIR}/libs/r8brain-free-src)
+ 
+ add_library(surge::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
+ target_link_libraries(${PROJECT_NAME}
+diff --git a/src/common/dsp/SurgeVoice.cpp b/src/common/dsp/SurgeVoice.cpp
+index 097d89bb..6f8893d7 100644
+--- a/src/common/dsp/SurgeVoice.cpp
++++ b/src/common/dsp/SurgeVoice.cpp
+@@ -127,10 +127,12 @@ float SurgeVoice::channelKeyEquivalent(float key, int channel, SurgeStorage *sto
+     {
+         res += 12 * shift;
+     }
++#ifndef SURGE_SKIP_ODDSOUND_MTS
+     else if (storage->oddsound_mts_active_as_client)
+     {
+         res += MTS_GetMapSize(storage->oddsound_mts_client) * shift;
+     }
++#endif
+     else if (storage->tuningApplicationMode == SurgeStorage::RETUNE_ALL)
+     {
+         // keys are in scale space so move scale.count
