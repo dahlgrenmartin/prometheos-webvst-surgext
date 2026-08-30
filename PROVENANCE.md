@@ -186,9 +186,17 @@ graph traps as a bare `unreachable` instead of unwinding. Diagnosing it
 required real symbolicated stack traces; the throw site changed three times as
 each earlier one was fixed:
 
-1. `homePath()`: `std::getenv("HOME")` returned null. Fixed on the JS host side
-   (no patch): `environ_sizes_get` / `environ_get` report one real variable,
-   `HOME=/`.
+1. `homePath()`: `std::getenv("HOME")` returned null. In the Buzz integration
+   this was fixed on the JS host side (no patch): the host's `environ_sizes_get`
+   / `environ_get` imports reported one variable, `HOME=/`. **This package does
+   not depend on that.** Hosts disagree about the WASI environment -- the SDK's
+   own probe supplies only `PATH=/usr/bin` and no `HOME` -- so a module that
+   needed the host to inject `HOME` would trap under a conforming consumer.
+   `src/surge_webvst.cpp` therefore installs its own defaults
+   (`setenv("HOME", "/", 0)`, `setenv("PATH", "/usr/bin", 0)`) immediately
+   before every `SurgeSynthesizer` construction. The `0` overwrite flag means a
+   host that does supply a value still wins. This is package-owned C++, not a
+   fourth upstream patch and not a host hook.
 2. `getOverridenUserPath()`: `std::filesystem::exists()` threw because a
    no-filesystem `stat` stub returned an errno `<filesystem>` did not
    recognize as "not found". Fixed by building with `-sWASMFS=1` (a real,
@@ -222,3 +230,108 @@ upstream source, and are recorded here so the full picture is in one place:
   reads `CMAKE_PROJECT_VERSION_*`, which name the outermost project; giving the
   wrapper Surge's version keeps that step correct without patching Surge.
 - `-sWASMFS=1` link option: see section 7.
+
+---
+
+## 9. Package ABI identity
+
+The module exposes Surge XT through the generic WebVST ABI v1 declared in
+`vendor/webvst-sdk/include/prometheos/webvst.h`. The identity below is fixed
+and reproducible; nothing in it is random, time-based, or machine-dependent.
+
+| Field | Value |
+|---|---|
+| Package ID | `org.prometheos.webvst.surgext` |
+| ABI | `prometheos-vst3-wasm-1` (`pvst_abi_version()` returns `1`) |
+| Class count | `1` |
+| Class UID | `b048fd6e0a4b628de039d7291fa13abd` |
+| Class name | `Surge XT` |
+| Class vendor | `Surge Synth Team` |
+| Class kind | `1` (instrument) |
+| Module | `build/surgext-webvst.wasm` |
+
+### Class UID derivation
+
+The 128-bit class UID is the first 16 bytes of the SHA-256 digest of a
+canonical preimage, rendered as 32 lowercase hexadecimal characters (the form
+`schema/plugin.schema.json` requires). The preimage is these four fields joined
+by a single newline byte (`0x0a`), with no trailing newline:
+
+```
+prometheos-vst3-wasm-1
+org.prometheos.webvst.surgext
+surge:2644c613fb729cf2ce924c39dc75cf6a61ee9324
+class:0
+```
+
+giving `sha256 = b048fd6e0a4b628de039d7291fa13abda12e7b15537fcc49a44be95a599464e6`
+and therefore `classUid = b048fd6e0a4b628de039d7291fa13abd`.
+
+Every field is either a constant of this repository or an immutable commit
+pin, so the UID moves only when the ABI, the package identity, the Surge pin,
+or the class index moves -- exactly the events that should mint a new identity.
+The value is a literal in `src/surge_webvst.h` (the module carries no SHA-256
+implementation); `tests/abi_surface.test.ts` recomputes the digest from those
+same four fields and fails if the literal ever drifts. Anything reading the
+module through the SDK probe must observe this same value.
+
+### Parameter identity
+
+Parameter IDs are Surge's own stable IDs: the index into `SurgePatch`'s flat
+`param_ptr` vector (global parameters, then per-scene parameters, then global
+post parameters). That order is fixed by Surge's patch construction for a given
+Surge commit, and the commit is part of the class UID, so a pin change mints a
+new class rather than silently renumbering an existing one. Values crossing the
+ABI are normalized `0..1` via Surge's own `getParameter01` / `setParameter01`.
+
+### Class metadata without a handle
+
+`pvst_class_param_*` take a class index and no instance handle, but Surge has
+no static parameter table: its parameter list exists only on a live
+`SurgeSynthesizer`, built by `SurgePatch`'s constructor. The module therefore
+lazily constructs **one** `SurgeSynthesizer` used solely for metadata --
+never processed, never mutated, never destroyed. Surge's factory init patch is
+deterministic, so its parameter layout, ranges and defaults are a faithful and
+stable description of the class. Keeping it separate from every live instance
+is deliberate: class metadata must describe the class, not whatever patch some
+instance currently holds. Value text for a normalized value is read with
+Surge's own `Parameter::get_display(external = true, ef = normalized)`, which
+formats `ef` rather than the stored value, so this stays side-effect free.
+
+### Surface
+
+Exports are the SDK's `PROMETHEOS_WEBVST_EXPORTS` list
+(`vendor/webvst-sdk/cmake/WebVstExports.cmake`) -- the 29 `pvst_*` entry points
+plus `_initialize`, `malloc` and `free` -- together with `memory`, the
+`__indirect_function_table`, and two Emscripten runtime helpers,
+`emscripten_stack_get_current` and `_emscripten_stack_restore`. Those last two
+are emitted by the toolchain in every standalone build (Emscripten's JS library
+`$stackSave`/`$stackRestore` depend on them) and are not package API; there is
+no supported `emcc` setting that suppresses them, and the SDK's probe and
+package consumer resolve exports by name, so they are inert. No `sx_*`, no
+mangled C++ symbol, and nothing else engine-private is exported.
+
+Imports are exactly eight, all inside the SDK's AudioWorklet-compatible
+allowlist (`vendor/webvst-sdk/docs/security-model.md`):
+`env.__cxa_rethrow`, `env.emscripten_notify_memory_growth`, and the WASI
+preview-1 calls `fd_write`, `fd_read`, `clock_time_get`, `environ_sizes_get`,
+`environ_get` and `random_get`.
+
+Both surfaces are asserted by `tests/abi_surface.test.ts`.
+
+### Placeholder parameters
+
+Surge's init patch exposes 766 parameters, of which 193 are `ct_none`
+placeholders: the parameter slots of the FX units, which carry no meaning until
+an effect type is chosen. They keep their IDs (dropping them would renumber the
+stable ID space) and are reported with `PVST_PARAMETER_READ_ONLY`, a zero
+default and zero steps. Their raw integer bounds span the whole `int` range, so
+the step-count computation is done in 64-bit arithmetic rather than overflowing
+a signed `int`.
+
+### Deliberate Task-2 limit
+
+`pvst_process` accepts only frame counts that are exact multiples of Surge's
+compile-time block size (`SURGE_COMPILE_BLOCK_SIZE=32`) and rejects anything
+else with `PVST_ERROR_FRAME_COUNT`. Generalising to arbitrary block sizes is a
+later task's FIFO, not a silent mis-render here.

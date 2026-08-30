@@ -1,1 +1,4 @@
 node_modules/
+
+# Built WebVST module (scripts/build.ts); intermediates live outside the repo.
+build/

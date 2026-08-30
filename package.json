@@ -6,6 +6,7 @@
   "description": "Surge XT compiled to a Prometheos WebVST (.webvst) package, distributed under GPLv3.",
   "license": "GPL-3.0-or-later",
   "scripts": {
+    "build": "bun scripts/build.ts",
     "test": "vitest run"
   },
   "devDependencies": {
