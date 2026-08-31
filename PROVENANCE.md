@@ -194,7 +194,13 @@ suppressed in `cmake/SurgeWebVst.cmake`:
 - `CMAKE_INSTALL_PREFIX` is forced to `/webvst`. Surge and sst-plugininfra both
   `configure_file()` it into generated C++ string literals, and under the
   Emscripten toolchain its default value is the emsdk's sysroot -- an absolute
-  path inside the developer's home directory.
+  path inside the developer's home directory. `cmake/SurgeWebVst.cmake` forces
+  the value, but that `set(... CACHE ... FORCE)` runs inside a function after
+  `project()` has already fixed the normal variable from the toolchain default,
+  so on a from-empty configure it does not take effect. `scripts/build.ts`
+  therefore also passes `-DCMAKE_INSTALL_PREFIX=/webvst` on the `cmake`
+  command line, which lands in the cache before `project()` and wins
+  unconditionally.
 - `-ffile-prefix-map` remaps the Surge checkout to `/surge`, this repository to
   `/pkg`, and the emsdk root to `/emsdk`, so `__FILE__` (expanded through
   sst-effects' adapter headers in Surge's effect sources) cannot embed the
@@ -392,3 +398,113 @@ patch cannot leak past the state change). `pvst_process` keeps its guards:
 `tests/variable_partition.test.ts` asserts the partition-independence on the
 built module with a factory preset held at a low note; `tests/abi_surface.test.ts`
 covers the frame-count contract.
+
+---
+
+## 10. Package assembly (`dist/SurgeXT.webvst`)
+
+`scripts/build.ts` produces the published package as well as the module. After
+`build/surgext-webvst.wasm` exists it packs the factory presets, generates and
+merges the manifest, stages the archive contents, and packs and verifies the
+container. `dist/` is written last, and only once the SDK's verifier has
+accepted the bytes; a failure at any gate leaves no `dist/` behind.
+
+### Preparing the SDK's authoring tools
+
+`vendor/webvst-sdk/tools` is distributed as TypeScript sources only -- there is
+no committed `dist/` and no `node_modules`, and `tools/dist/*.js` is local
+`tsc` output. The build therefore prepares them itself, guarded so it happens
+at most once:
+
+```
+pnpm install --frozen-lockfile --ignore-workspace   # in vendor/webvst-sdk/tools
+pnpm run build                                      # tsc --outDir dist
+```
+
+`--ignore-workspace` is load-bearing. This repository's own
+`pnpm-workspace.yaml` (`packages: []`) is the nearest workspace root above the
+tools directory, and without the flag pnpm concludes the tools are not a
+workspace member and installs **nothing at all** -- silently, in well under a
+second. The subsequent `tsc` still emits JavaScript (type errors do not stop
+emit), so the failure surfaces much later as a runtime "cannot find module
+`zod`". The readiness guard consequently checks both `tools/dist/*.js` **and**
+`tools/node_modules/zod`, so a half-finished previous attempt is repaired
+rather than trusted. Preparation runs before the multi-minute Surge compile, so
+a missing network fails in seconds rather than at the end.
+
+### Two entry points, chosen for a reason
+
+- **Manifest: imported in-process.** `generateManifest()` is the only interface
+  that accepts the authored `curation` (the `webvst manifest` CLI command does
+  not), and it is the only one that hands back an object to merge `programs`
+  and `artifacts` into. Its output is spec-defined JSON over probed integers
+  and strings and is byte-identical whichever runtime produces it (verified:
+  same SHA-256 from Bun and from Node).
+- **Pack and verify: shelled out to `node vendor/webvst-sdk/tools/dist/cli.js`.**
+  The container is deflated, and deflate output is a property of the zlib the
+  runtime links rather than of the ZIP format: packing one identical staging
+  tree yields 8,504,047 bytes under Bun and 8,408,156 under Node. Both are
+  valid archives; they are not the same archive. The SDK's tools are a Node
+  program (`bin: dist/cli.js`, `#!/usr/bin/env node`), so Node is the runtime
+  that defines these bytes. Shelling out pins them there and keeps the
+  published archive independent of whichever runtime executes the build script.
+
+### The manifest is a merge, and the class identity is asserted
+
+The SDK's `generateManifest()` probes the module and emits class identity plus
+`exposedParameters`. It never emits `programs` or top-level `artifacts` -- those
+describe packaged content the module knows nothing about. The build supplies
+them from `scripts/pack-presets.ts` (`toManifestPrograms()` /
+`toManifestArtifacts()`), assigns them onto class 0 and the manifest root, and
+re-runs the SDK's `validateManifest()` over the merged whole before writing it.
+`plugin.json` is written exactly as `webvst manifest` writes it: one canonical
+`JSON.stringify` line plus a newline.
+
+Between the probe and the merge the build asserts the probed `classUid`,
+`name`, `vendor` and `kind` against the `class` block in
+`package/webvst.config.json`, and the emitted ABI against its `abi`. The probe
+is authoritative and the config is an assertion about it; a divergence means
+the config is stale (or the module is not the one it describes) and the build
+stops. A host resolves plugins by class UID, so a manifest that disagrees with
+its module is a silent mis-identity rather than a loud failure.
+
+### The staging tree is the archive
+
+Staging is rebuilt from scratch inside the build work tree on every run, so no
+stale file can be packed and no generated content sits in the working tree. It
+contains exactly:
+
+```
+plugin.json            merged manifest, one canonical line
+plugin.wasm            copy of build/surgext-webvst.wasm
+presets/<slug>.bin      17 category artifacts, from scripts/pack-presets.ts
+licenses/GPL-3.0.txt
+licenses/SURGE-NOTICE.txt
+licenses/WEBVST-SDK-MIT.txt
+```
+
+The build compares the staged entry set against that declared list and fails on
+anything missing or extra, and separately rejects any `.js` / `.mjs` / `.cjs`
+entry by name. The SDK's verifier enforces both too; failing here names the
+offending file. The archive is packed beside the staging tree and verified
+there; only then is it copied to `dist/SurgeXT.webvst`, with its SHA-256
+written alongside as `dist/SurgeXT.webvst.sha256` in `sha256sum` form.
+
+### The determinism gate
+
+`pnpm run clean-build` (`bun scripts/build.ts --clean`) removes `dist/`,
+`package/presets/`, `build/` and the whole build work tree, then builds. It is
+both the reproducibility check -- two clean builds on one machine must produce
+the same archive SHA-256 -- and the only thing that exercises a from-empty
+upstream checkout, where `applyPatches()` genuinely has to apply the patches
+rather than detect them already applied.
+
+`tests/package.test.ts` backstops it structurally, without a second compile: it
+traces every archive byte to a primary source (the module to `build/`, the
+preset artifacts to a fresh `packPresets()` over the pinned factory tree, the
+licenses to `package/licenses/`), and re-packs the extracted entries to confirm
+the container framing itself is a function of its contents.
+`tests/real_engine.test.ts` then instantiates the module **taken out of the
+archive** and plays it: notes, decay, parameters, factory presets recalled from
+the packed slices at their manifest offsets, state round-trip, and two isolated
+instances.
