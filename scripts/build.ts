@@ -271,7 +271,7 @@ function assertPinnedSubmodule(): void {
   if (head !== SURGE_PIN) {
     throw new Error(`vendor/surge is at ${head}, expected the pinned commit ${SURGE_PIN}`);
   }
-  if (!existsSync(join(vendorSdkDir, "include", "prometheos", "webvst.h"))) {
+  if (!existsSync(join(vendorSdkDir, "include", "webvst", "webvst.h"))) {
     throw new Error(
       `vendor/webvst-sdk is not checked out. Run: git submodule update --init vendor/webvst-sdk`,
     );
@@ -416,7 +416,16 @@ interface AuthorConfig {
 }
 
 interface ManifestClass extends AuthoredClass {
-  exposedParameters: Array<{ parameterId: number; buzz: Record<string, unknown> }>;
+  exposedParameters: Array<{
+    parameterId: number;
+    name: string;
+    description: string;
+    flags: number;
+    stepCount: number;
+    defaultValue: number;
+    display?: Record<string, unknown>;
+    extensions?: Record<string, Record<string, unknown>>;
+  }>;
   programs?: ManifestPrograms;
 }
 

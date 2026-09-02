@@ -21,7 +21,7 @@ const selfPath = fileURLToPath(import.meta.url);
 
 // --- Immutable pins -------------------------------------------------------------
 const SURGE_PIN = "2644c613fb729cf2ce924c39dc75cf6a61ee9324";
-const SDK_PIN = "777b4077aee6d88aa66e0c07d328de7450b69458";
+const SDK_PIN = "4ca8a189f49b499d94d3078016f2cb834dda2269";
 const SURGE_URL = "https://github.com/surge-synthesizer/surge.git";
 const SDK_URL = "../prometheos-vst3-wasm-sdk";
 

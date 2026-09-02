@@ -13,7 +13,7 @@ Everything below is machine-checked by `tests/provenance.test.ts`.
 | Component | Path | Upstream | Pinned commit | License |
 |---|---|---|---|---|
 | Surge XT | `vendor/surge` | `https://github.com/surge-synthesizer/surge.git` | `2644c613fb729cf2ce924c39dc75cf6a61ee9324` | GPL-3.0-or-later |
-| Prometheos WebVST SDK | `vendor/webvst-sdk` | local relative path `../prometheos-vst3-wasm-sdk` | `777b4077aee6d88aa66e0c07d328de7450b69458` | MIT |
+| WebVST SDK | `vendor/webvst-sdk` | local relative path `../prometheos-vst3-wasm-sdk` | `4ca8a189f49b499d94d3078016f2cb834dda2269` | MIT |
 
 Both are Git submodules. Neither entry in `.gitmodules` carries a `branch =`
 key: each is pinned to an immutable commit, never a moving ref. Surge's own
@@ -25,8 +25,8 @@ a later task initializes only the ~15 that `src/common` actually needs.
 
 The WebVST SDK is currently an unpublished local repository, pinned by immutable commit; the `.gitmodules` URL is a local relative path and must be updated to the public URL when the SDK is published. Immutability is guaranteed by the commit pin regardless of URL.
 
-The SDK commit `777b4077aee6d88aa66e0c07d328de7450b69458` is the completed
-ABI-v1 state (ABI string `prometheos-vst3-wasm-1`). The SDK has no tags; this
+The SDK commit `4ca8a189f49b499d94d3078016f2cb834dda2269` is the completed
+ABI-v1 state (ABI string `webvst-vst3-wasm-1`). The SDK has no tags; this
 commit *is* the release. Its public ABI header is
 `vendor/webvst-sdk/include/prometheos/webvst.h`. The SDK is MIT-licensed
 (`vendor/webvst-sdk/LICENSE`); its own `NOTICE.md` records the Steinberg VST3
@@ -213,7 +213,7 @@ path at all.
 
 ---
 
-## 7. Runtime construction (`sx_create` / `pvst_create`)
+## 7. Runtime construction (`sx_create` / `webvst_create`)
 
 `SurgeStorage`'s constructor resolves a config/data path before anything else,
 touching real POSIX filesystem and environment APIs (`std::getenv("HOME")`,
@@ -280,7 +280,7 @@ and reproducible; nothing in it is random, time-based, or machine-dependent.
 | Field | Value |
 |---|---|
 | Package ID | `org.prometheos.webvst.surgext` |
-| ABI | `prometheos-vst3-wasm-1` (`pvst_abi_version()` returns `1`) |
+| ABI | `webvst-vst3-wasm-1` (`webvst_abi_version()` returns `1`) |
 | Class count | `1` |
 | Class UID | `b048fd6e0a4b628de039d7291fa13abd` |
 | Class name | `Surge XT` |
@@ -296,7 +296,7 @@ canonical preimage, rendered as 32 lowercase hexadecimal characters (the form
 by a single newline byte (`0x0a`), with no trailing newline:
 
 ```
-prometheos-vst3-wasm-1
+webvst-vst3-wasm-1
 org.prometheos.webvst.surgext
 surge:2644c613fb729cf2ce924c39dc75cf6a61ee9324
 class:0
@@ -324,7 +324,7 @@ ABI are normalized `0..1` via Surge's own `getParameter01` / `setParameter01`.
 
 ### Class metadata without a handle
 
-`pvst_class_param_*` take a class index and no instance handle, but Surge has
+`webvst_class_param_*` take a class index and no instance handle, but Surge has
 no static parameter table: its parameter list exists only on a live
 `SurgeSynthesizer`, built by `SurgePatch`'s constructor. The module therefore
 lazily constructs **one** `SurgeSynthesizer` used solely for metadata --
@@ -339,7 +339,7 @@ formats `ef` rather than the stored value, so this stays side-effect free.
 ### Surface
 
 Exports are the SDK's `PROMETHEOS_WEBVST_EXPORTS` list
-(`vendor/webvst-sdk/cmake/WebVstExports.cmake`) -- the 29 `pvst_*` entry points
+(`vendor/webvst-sdk/cmake/WebVstExports.cmake`) -- the 29 `webvst_*` entry points
 plus `_initialize`, `malloc` and `free` -- together with `memory`, the
 `__indirect_function_table`, and two Emscripten runtime helpers,
 `emscripten_stack_get_current` and `_emscripten_stack_restore`. Those last two
@@ -362,14 +362,14 @@ Both surfaces are asserted by `tests/abi_surface.test.ts`.
 Surge's init patch exposes 766 parameters, of which 193 are `ct_none`
 placeholders: the parameter slots of the FX units, which carry no meaning until
 an effect type is chosen. They keep their IDs (dropping them would renumber the
-stable ID space) and are reported with `PVST_PARAMETER_READ_ONLY`, a zero
+stable ID space) and are reported with `WEBVST_PARAMETER_READ_ONLY`, a zero
 default and zero steps. Their raw integer bounds span the whole `int` range, so
 the step-count computation is done in 64-bit arithmetic rather than overflowing
 a signed `int`.
 
 ### Host block sizes and the fixed-block FIFO
 
-`pvst_process` accepts any frame count in `0..PVST_MAX_PROCESS_FRAMES` (128) per
+`webvst_process` accepts any frame count in `0..WEBVST_MAX_PROCESS_FRAMES` (128) per
 host call. Surge's engine still runs only on its compile-time block
 (`SURGE_COMPILE_BLOCK_SIZE=32`); the bridge is a package-owned accumulating FIFO,
 `src/fixed_block_stream.{h,cpp}` (`FixedBlockStream`). It is Surge-independent --
@@ -389,12 +389,12 @@ entered the FIFO 32 positions earlier. The output stream is a pure function of
 the input and does not depend on how the host partitions its calls -- `[128]`,
 `[32]x4`, `[1]x128` and any ragged mix produce identical samples.
 
-The stream is cleared on `pvst_reset`, on slot reuse in `pvst_create`, and at
-the end of a successful `pvst_state_load` (so audio buffered from the previous
-patch cannot leak past the state change). `pvst_process` keeps its guards:
-`PVST_ERROR_HANDLE` for a dead handle, `PVST_ERROR_ARGUMENT` for a null
-`output`, `PVST_ERROR_FRAME_COUNT` for `frames` above the instance's
-`max_frames` or above 128, and `PVST_OK` no-op for `frames == 0`.
+The stream is cleared on `webvst_reset`, on slot reuse in `webvst_create`, and at
+the end of a successful `webvst_state_load` (so audio buffered from the previous
+patch cannot leak past the state change). `webvst_process` keeps its guards:
+`WEBVST_ERROR_HANDLE` for a dead handle, `WEBVST_ERROR_ARGUMENT` for a null
+`output`, `WEBVST_ERROR_FRAME_COUNT` for `frames` above the instance's
+`max_frames` or above 128, and `WEBVST_OK` no-op for `frames == 0`.
 `tests/variable_partition.test.ts` asserts the partition-independence on the
 built module with a factory preset held at a low note; `tests/abi_surface.test.ts`
 covers the frame-count contract.

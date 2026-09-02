@@ -11,7 +11,7 @@ import { readArchiveEntries } from "./webvst_archive";
  * Everything here runs against the module and the preset bytes taken OUT OF
  * `dist/SurgeXT.webvst` -- not out of `build/`, not out of `package/presets/`.
  * The point is to prove that what the package actually ships makes sound: a
- * host that only ever sees the archive and the generic `pvst_*` ABI can play
+ * host that only ever sees the archive and the generic `webvst_*` ABI can play
  * notes, move parameters, recall factory presets, and save and restore state.
  *
  * `tests/abi_surface.test.ts` locks the ABI's shape and its error contract on
@@ -26,9 +26,9 @@ import { readArchiveEntries } from "./webvst_archive";
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const archivePath = join(repoRoot, "dist", "SurgeXT.webvst");
 
-const PVST_OK = 0;
-const PVST_ERROR_FRAME_COUNT = -3;
-const PVST_PARAMETER_AUTOMATABLE = 1;
+const WEBVST_OK = 0;
+const WEBVST_ERROR_FRAME_COUNT = -3;
+const WEBVST_PARAMETER_AUTOMATABLE = 1;
 
 const SAMPLE_RATE = 48_000;
 const MAX_FRAMES = 128;
@@ -137,15 +137,15 @@ function instantiate(): AbiInstance {
 /** A live instance plus a scratch output buffer, torn down after `body`. */
 function withVoice<T>(body: (abi: AbiInstance, handle: number, output: number) => T): T {
   const abi = instantiate();
-  const handle = abi.fn("pvst_create")(0, SAMPLE_RATE, MAX_FRAMES) >>> 0;
-  if (handle === 0) throw new Error("pvst_create returned a null handle");
+  const handle = abi.fn("webvst_create")(0, SAMPLE_RATE, MAX_FRAMES) >>> 0;
+  if (handle === 0) throw new Error("webvst_create returned a null handle");
   const output = abi.malloc(MAX_FRAMES * 2 * 4);
   if (output === 0) throw new Error("malloc for the output buffer failed");
   try {
     return body(abi, handle, output);
   } finally {
     abi.free(output);
-    abi.fn("pvst_destroy")(handle);
+    abi.fn("webvst_destroy")(handle);
   }
 }
 
@@ -157,8 +157,8 @@ function withVoice<T>(body: (abi: AbiInstance, handle: number, output: number) =
 function render(abi: AbiInstance, handle: number, output: number, blocks: number): number {
   let peak = 0;
   for (let block = 0; block < blocks; block += 1) {
-    const result = abi.fn("pvst_process")(handle, 0, output, MAX_FRAMES);
-    if (result !== PVST_OK) throw new Error(`pvst_process failed with ${result}`);
+    const result = abi.fn("webvst_process")(handle, 0, output, MAX_FRAMES);
+    if (result !== WEBVST_OK) throw new Error(`webvst_process failed with ${result}`);
     const samples = new Float32Array(abi.memory.buffer, output, MAX_FRAMES * 2);
     for (const sample of samples) {
       if (!Number.isFinite(sample)) throw new Error(`non-finite sample in block ${block}`);
@@ -171,11 +171,11 @@ function render(abi: AbiInstance, handle: number, output: number, blocks: number
 
 /** The first continuous (step count 0) automatable parameter -- deterministic. */
 function continuousParameter(abi: AbiInstance): number {
-  const count = abi.fn("pvst_class_param_count")(0) >>> 0;
+  const count = abi.fn("webvst_class_param_count")(0) >>> 0;
   for (let index = 0; index < count; index += 1) {
     if (
-      (abi.fn("pvst_class_param_step_count")(0, index) >>> 0) === 0 &&
-      ((abi.fn("pvst_class_param_flags")(0, index) >>> 0) & PVST_PARAMETER_AUTOMATABLE) !== 0
+      (abi.fn("webvst_class_param_step_count")(0, index) >>> 0) === 0 &&
+      ((abi.fn("webvst_class_param_flags")(0, index) >>> 0) & WEBVST_PARAMETER_AUTOMATABLE) !== 0
     ) {
       return index;
     }
@@ -197,8 +197,8 @@ function loadProgram(abi: AbiInstance, handle: number, program: ManifestProgram)
   if (pointer === 0) throw new Error("malloc for the preset state failed");
   try {
     abi.bytes().set(state, pointer);
-    const result = abi.fn("pvst_state_load")(handle, pointer, state.byteLength);
-    if (result !== PVST_OK) throw new Error(`pvst_state_load failed with ${result}`);
+    const result = abi.fn("webvst_state_load")(handle, pointer, state.byteLength);
+    if (result !== WEBVST_OK) throw new Error(`webvst_state_load failed with ${result}`);
   } finally {
     abi.free(pointer);
   }
@@ -226,18 +226,18 @@ describe("the packaged Surge XT engine makes sound", () => {
     withVoice((abi, handle, output) => {
       // Silence before any note: the instrument is idle, not noisy.
       expect(render(abi, handle, output, 4)).toBeLessThan(1e-6);
-      expect(abi.fn("pvst_note_on")(handle, 60, 0.8)).toBe(PVST_OK);
+      expect(abi.fn("webvst_note_on")(handle, 60, 0.8)).toBe(WEBVST_OK);
       expect(render(abi, handle, output, 64)).toBeGreaterThan(1e-3);
     });
   }, 120_000);
 
   it("decays back towards silence after a note-off", () => {
     withVoice((abi, handle, output) => {
-      expect(abi.fn("pvst_note_on")(handle, 60, 0.8)).toBe(PVST_OK);
+      expect(abi.fn("webvst_note_on")(handle, 60, 0.8)).toBe(WEBVST_OK);
       const held = render(abi, handle, output, 64);
       expect(held).toBeGreaterThan(1e-3);
 
-      expect(abi.fn("pvst_note_off")(handle, 60)).toBe(PVST_OK);
+      expect(abi.fn("webvst_note_off")(handle, 60)).toBe(WEBVST_OK);
       // Surge's release plus its output filters take a moment; give the voice
       // up to ~5 s of audio and measure the tail, not the transient.
       let tail = held;
@@ -252,8 +252,8 @@ describe("the packaged Surge XT engine makes sound", () => {
     withVoice((abi, handle) => {
       const target = continuousParameter(abi);
       for (const value of [0, 0.125, 0.5, 0.875, 1]) {
-        expect(abi.fn("pvst_param_set")(handle, target, value)).toBe(PVST_OK);
-        expect(abi.fn("pvst_param_get")(handle, target)).toBeCloseTo(value, 4);
+        expect(abi.fn("webvst_param_set")(handle, target, value)).toBe(WEBVST_OK);
+        expect(abi.fn("webvst_param_get")(handle, target)).toBeCloseTo(value, 4);
       }
     });
   }, 120_000);
@@ -261,34 +261,34 @@ describe("the packaged Surge XT engine makes sound", () => {
   it("accepts every host block size in 0..128 and rejects 129", () => {
     withVoice((abi, handle, output) => {
       for (const frames of [0, 1, 31, 32, 33, 127, 128]) {
-        expect(abi.fn("pvst_process")(handle, 0, output, frames), `${frames} frames`).toBe(PVST_OK);
+        expect(abi.fn("webvst_process")(handle, 0, output, frames), `${frames} frames`).toBe(WEBVST_OK);
       }
-      expect(abi.fn("pvst_process")(handle, 0, output, 129)).toBe(PVST_ERROR_FRAME_COUNT);
+      expect(abi.fn("webvst_process")(handle, 0, output, 129)).toBe(WEBVST_ERROR_FRAME_COUNT);
     });
   }, 120_000);
 
   it("keeps two concurrent instances isolated from each other", () => {
     const abi = instantiate();
-    const first = abi.fn("pvst_create")(0, SAMPLE_RATE, MAX_FRAMES) >>> 0;
-    const second = abi.fn("pvst_create")(0, SAMPLE_RATE, MAX_FRAMES) >>> 0;
+    const first = abi.fn("webvst_create")(0, SAMPLE_RATE, MAX_FRAMES) >>> 0;
+    const second = abi.fn("webvst_create")(0, SAMPLE_RATE, MAX_FRAMES) >>> 0;
     expect(first).not.toBe(0);
     expect(second).not.toBe(0);
     expect(first).not.toBe(second);
     try {
       const target = continuousParameter(abi);
-      const baseline = abi.fn("pvst_param_get")(second, target);
+      const baseline = abi.fn("webvst_param_get")(second, target);
 
-      expect(abi.fn("pvst_param_set")(first, target, 0.3)).toBe(PVST_OK);
-      expect(abi.fn("pvst_param_get")(first, target)).toBeCloseTo(0.3, 4);
-      expect(abi.fn("pvst_param_get")(second, target)).toBeCloseTo(baseline, 6);
+      expect(abi.fn("webvst_param_set")(first, target, 0.3)).toBe(WEBVST_OK);
+      expect(abi.fn("webvst_param_get")(first, target)).toBeCloseTo(0.3, 4);
+      expect(abi.fn("webvst_param_get")(second, target)).toBeCloseTo(baseline, 6);
 
       // And a preset recalled into one leaves the other's patch alone.
       const first_category = categories()[0];
       loadProgram(abi, second, first_category.entries[0]);
-      expect(abi.fn("pvst_param_get")(first, target)).toBeCloseTo(0.3, 4);
+      expect(abi.fn("webvst_param_get")(first, target)).toBeCloseTo(0.3, 4);
     } finally {
-      abi.fn("pvst_destroy")(first);
-      abi.fn("pvst_destroy")(second);
+      abi.fn("webvst_destroy")(first);
+      abi.fn("webvst_destroy")(second);
     }
   }, 120_000);
 
@@ -298,20 +298,20 @@ describe("the packaged Surge XT engine makes sound", () => {
       const saved = 0.25;
       const overwritten = 0.8;
 
-      expect(abi.fn("pvst_param_set")(handle, target, saved)).toBe(PVST_OK);
-      const size = abi.fn("pvst_state_size")(handle) >>> 0;
+      expect(abi.fn("webvst_param_set")(handle, target, saved)).toBe(WEBVST_OK);
+      const size = abi.fn("webvst_state_size")(handle) >>> 0;
       expect(size).toBeGreaterThan(0);
       const pointer = abi.malloc(size);
       expect(pointer).not.toBe(0);
       try {
-        expect(abi.fn("pvst_state_write")(handle, pointer, size)).toBe(PVST_OK);
+        expect(abi.fn("webvst_state_write")(handle, pointer, size)).toBe(WEBVST_OK);
         expect(new TextDecoder().decode(abi.bytes().slice(pointer, pointer + 4))).toBe("sub3");
 
-        expect(abi.fn("pvst_param_set")(handle, target, overwritten)).toBe(PVST_OK);
-        expect(abi.fn("pvst_param_get")(handle, target)).toBeCloseTo(overwritten, 4);
+        expect(abi.fn("webvst_param_set")(handle, target, overwritten)).toBe(WEBVST_OK);
+        expect(abi.fn("webvst_param_get")(handle, target)).toBeCloseTo(overwritten, 4);
 
-        expect(abi.fn("pvst_state_load")(handle, pointer, size)).toBe(PVST_OK);
-        expect(abi.fn("pvst_param_get")(handle, target)).toBeCloseTo(saved, 4);
+        expect(abi.fn("webvst_state_load")(handle, pointer, size)).toBe(WEBVST_OK);
+        expect(abi.fn("webvst_param_get")(handle, target)).toBeCloseTo(saved, 4);
       } finally {
         abi.free(pointer);
       }
@@ -329,7 +329,7 @@ describe("the packaged factory presets load and play", () => {
 
     withVoice((abi, handle, output) => {
       loadProgram(abi, handle, program);
-      expect(abi.fn("pvst_note_on")(handle, 48, 0.9)).toBe(PVST_OK);
+      expect(abi.fn("webvst_note_on")(handle, 48, 0.9)).toBe(WEBVST_OK);
       expect(render(abi, handle, output, 96)).toBeGreaterThan(1e-3);
     });
   }, 120_000);
@@ -345,7 +345,7 @@ describe("the packaged factory presets load and play", () => {
 
     withVoice((abi, handle, output) => {
       loadProgram(abi, handle, program);
-      expect(abi.fn("pvst_note_on")(handle, 60, 0.9)).toBe(PVST_OK);
+      expect(abi.fn("webvst_note_on")(handle, 60, 0.9)).toBe(WEBVST_OK);
       expect(render(abi, handle, output, 96)).toBeGreaterThan(1e-3);
     });
   }, 120_000);
@@ -357,10 +357,10 @@ describe("the packaged factory presets load and play", () => {
     withVoice((abi, handle, output) => {
       const peaks = [basses[0], basses[1]].map((program) => {
         loadProgram(abi, handle, program);
-        expect(abi.fn("pvst_reset")(handle)).toBe(PVST_OK);
-        expect(abi.fn("pvst_note_on")(handle, 48, 0.9)).toBe(PVST_OK);
+        expect(abi.fn("webvst_reset")(handle)).toBe(WEBVST_OK);
+        expect(abi.fn("webvst_note_on")(handle, 48, 0.9)).toBe(WEBVST_OK);
         const peak = render(abi, handle, output, 64);
-        expect(abi.fn("pvst_note_off")(handle, 48)).toBe(PVST_OK);
+        expect(abi.fn("webvst_note_off")(handle, 48)).toBe(WEBVST_OK);
         render(abi, handle, output, 64);
         return peak;
       });

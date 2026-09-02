@@ -77,7 +77,7 @@ struct Slot
  * over synth->input / synth->output. Surge XT is an instrument with no main
  * input here, but the FIFO still hands a full 32-frame input block (zeros for a
  * null host input), so this always copies 32 whole frames in and out. Stack
- * allocated per pvst_process call; holds no state of its own.
+ * allocated per webvst_process call; holds no state of its own.
  */
 struct SurgeBlockProcessor final : BlockProcessor
 {
@@ -258,17 +258,17 @@ std::string paramTitle(const Parameter *p)
 /**
  * The ABI's string convention: `*_size` reports the UTF-8 byte length with no
  * terminating NUL, `*_write` writes exactly that many bytes. A null
- * destination or an insufficient capacity is PVST_ERROR_BUFFER_TOO_SMALL; an
- * invalid index is PVST_ERROR_ARGUMENT and is therefore checked by the caller
+ * destination or an insufficient capacity is WEBVST_ERROR_BUFFER_TOO_SMALL; an
+ * invalid index is WEBVST_ERROR_ARGUMENT and is therefore checked by the caller
  * before this runs.
  */
 int32_t writeString(const std::string &value, char *dst, uint32_t capacity)
 {
     if (dst == nullptr || capacity < value.size())
-        return PVST_ERROR_BUFFER_TOO_SMALL;
+        return WEBVST_ERROR_BUFFER_TOO_SMALL;
     if (!value.empty())
         std::memcpy(dst, value.data(), value.size());
-    return PVST_OK;
+    return WEBVST_OK;
 }
 
 } // namespace
@@ -280,54 +280,54 @@ extern "C"
 // Discovery
 // ---------------------------------------------------------------------------
 
-uint32_t pvst_abi_version(void) { return PVST_ABI_VERSION; }
+uint32_t webvst_abi_version(void) { return WEBVST_ABI_VERSION; }
 
-uint32_t pvst_class_count(void) { return kClassCount; }
+uint32_t webvst_class_count(void) { return kClassCount; }
 
-uint32_t pvst_class_uid_size(uint32_t class_index)
+uint32_t webvst_class_uid_size(uint32_t class_index)
 {
     return class_index == kClassIndex ? static_cast<uint32_t>(std::strlen(kClassUid)) : 0u;
 }
 
-int32_t pvst_class_uid_write(uint32_t class_index, char *dst, uint32_t capacity)
+int32_t webvst_class_uid_write(uint32_t class_index, char *dst, uint32_t capacity)
 {
     if (class_index != kClassIndex)
-        return PVST_ERROR_ARGUMENT;
+        return WEBVST_ERROR_ARGUMENT;
     return writeString(kClassUid, dst, capacity);
 }
 
-uint32_t pvst_class_name_size(uint32_t class_index)
+uint32_t webvst_class_name_size(uint32_t class_index)
 {
     return class_index == kClassIndex ? static_cast<uint32_t>(std::strlen(kClassName)) : 0u;
 }
 
-int32_t pvst_class_name_write(uint32_t class_index, char *dst, uint32_t capacity)
+int32_t webvst_class_name_write(uint32_t class_index, char *dst, uint32_t capacity)
 {
     if (class_index != kClassIndex)
-        return PVST_ERROR_ARGUMENT;
+        return WEBVST_ERROR_ARGUMENT;
     return writeString(kClassName, dst, capacity);
 }
 
-uint32_t pvst_class_vendor_size(uint32_t class_index)
+uint32_t webvst_class_vendor_size(uint32_t class_index)
 {
     return class_index == kClassIndex ? static_cast<uint32_t>(std::strlen(kClassVendor)) : 0u;
 }
 
-int32_t pvst_class_vendor_write(uint32_t class_index, char *dst, uint32_t capacity)
+int32_t webvst_class_vendor_write(uint32_t class_index, char *dst, uint32_t capacity)
 {
     if (class_index != kClassIndex)
-        return PVST_ERROR_ARGUMENT;
+        return WEBVST_ERROR_ARGUMENT;
     return writeString(kClassVendor, dst, capacity);
 }
 
-uint32_t pvst_class_kind(uint32_t class_index)
+uint32_t webvst_class_kind(uint32_t class_index)
 {
     return class_index == kClassIndex ? kClassKindInstrument : kClassKindEffect;
 }
 
-uint32_t pvst_class_param_count(uint32_t class_index) { return classParamCount(class_index); }
+uint32_t webvst_class_param_count(uint32_t class_index) { return classParamCount(class_index); }
 
-uint32_t pvst_class_param_id(uint32_t class_index, uint32_t parameter_index)
+uint32_t webvst_class_param_id(uint32_t class_index, uint32_t parameter_index)
 {
     return classParam(class_index, parameter_index) != nullptr ? parameter_index : 0u;
 }
@@ -337,38 +337,38 @@ uint32_t pvst_class_param_id(uint32_t class_index, uint32_t parameter_index)
  * carry no value a host can meaningfully drive, so they are reported read-only;
  * every real parameter is automatable.
  */
-uint32_t pvst_class_param_flags(uint32_t class_index, uint32_t parameter_index)
+uint32_t webvst_class_param_flags(uint32_t class_index, uint32_t parameter_index)
 {
     const Parameter *p = classParam(class_index, parameter_index);
     if (p == nullptr)
         return 0u;
-    return p->ctrltype == ct_none ? PVST_PARAMETER_READ_ONLY : PVST_PARAMETER_AUTOMATABLE;
+    return p->ctrltype == ct_none ? WEBVST_PARAMETER_READ_ONLY : WEBVST_PARAMETER_AUTOMATABLE;
 }
 
-uint32_t pvst_class_param_step_count(uint32_t class_index, uint32_t parameter_index)
+uint32_t webvst_class_param_step_count(uint32_t class_index, uint32_t parameter_index)
 {
     const Parameter *p = classParam(class_index, parameter_index);
     return p != nullptr ? paramStepCount(p) : 0u;
 }
 
-float pvst_class_param_default(uint32_t class_index, uint32_t parameter_index)
+float webvst_class_param_default(uint32_t class_index, uint32_t parameter_index)
 {
     const Parameter *p = classParam(class_index, parameter_index);
     return p != nullptr ? sanitizeNormalized(p->get_default_value_f01()) : 0.0f;
 }
 
-uint32_t pvst_class_param_title_size(uint32_t class_index, uint32_t parameter_index)
+uint32_t webvst_class_param_title_size(uint32_t class_index, uint32_t parameter_index)
 {
     const Parameter *p = classParam(class_index, parameter_index);
     return p != nullptr ? static_cast<uint32_t>(paramTitle(p).size()) : 0u;
 }
 
-int32_t pvst_class_param_title_write(uint32_t class_index, uint32_t parameter_index, char *dst,
+int32_t webvst_class_param_title_write(uint32_t class_index, uint32_t parameter_index, char *dst,
                                      uint32_t capacity)
 {
     const Parameter *p = classParam(class_index, parameter_index);
     if (p == nullptr)
-        return PVST_ERROR_ARGUMENT;
+        return WEBVST_ERROR_ARGUMENT;
     return writeString(paramTitle(p), dst, capacity);
 }
 
@@ -378,7 +378,7 @@ int32_t pvst_class_param_title_write(uint32_t class_index, uint32_t parameter_in
  * `ef` rather than the stored value, so the metadata synthesizer stays pristine
  * and this is safe to call for every step of a discrete parameter.
  */
-uint32_t pvst_class_param_value_text_size(uint32_t class_index, uint32_t parameter_index,
+uint32_t webvst_class_param_value_text_size(uint32_t class_index, uint32_t parameter_index,
                                           float normalized)
 {
     const Parameter *p = classParam(class_index, parameter_index);
@@ -387,12 +387,12 @@ uint32_t pvst_class_param_value_text_size(uint32_t class_index, uint32_t paramet
     return static_cast<uint32_t>(p->get_display(true, normalized).size());
 }
 
-int32_t pvst_class_param_value_text_write(uint32_t class_index, uint32_t parameter_index,
+int32_t webvst_class_param_value_text_write(uint32_t class_index, uint32_t parameter_index,
                                           float normalized, char *dst, uint32_t capacity)
 {
     const Parameter *p = classParam(class_index, parameter_index);
     if (p == nullptr || !isValidNormalized(normalized))
-        return PVST_ERROR_ARGUMENT;
+        return WEBVST_ERROR_ARGUMENT;
     return writeString(p->get_display(true, normalized), dst, capacity);
 }
 
@@ -400,13 +400,13 @@ int32_t pvst_class_param_value_text_write(uint32_t class_index, uint32_t paramet
 // Instance lifetime
 // ---------------------------------------------------------------------------
 
-uint32_t pvst_create(uint32_t class_index, double sample_rate, uint32_t max_frames)
+uint32_t webvst_create(uint32_t class_index, double sample_rate, uint32_t max_frames)
 {
     if (class_index != kClassIndex)
         return 0u;
     if (!std::isfinite(sample_rate) || sample_rate <= 0.0)
         return 0u;
-    if (max_frames == 0u || max_frames > PVST_MAX_PROCESS_FRAMES)
+    if (max_frames == 0u || max_frames > WEBVST_MAX_PROCESS_FRAMES)
         return 0u;
 
     auto &table = slots();
@@ -435,7 +435,7 @@ uint32_t pvst_create(uint32_t class_index, double sample_rate, uint32_t max_fram
     return makeHandle(slotIndex, table[slotIndex].generation);
 }
 
-void pvst_destroy(uint32_t handle)
+void webvst_destroy(uint32_t handle)
 {
     Slot *slot = resolve(handle);
     if (slot == nullptr)
@@ -445,14 +445,14 @@ void pvst_destroy(uint32_t handle)
     slot->maxFrames = 0u;
 }
 
-int32_t pvst_reset(uint32_t handle)
+int32_t webvst_reset(uint32_t handle)
 {
     Slot *slot = resolve(handle);
     if (slot == nullptr)
-        return PVST_ERROR_HANDLE;
+        return WEBVST_ERROR_HANDLE;
     slot->synth->allNotesOff();
     slot->stream.reset();
-    return PVST_OK;
+    return WEBVST_OK;
 }
 
 /**
@@ -464,46 +464,46 @@ int32_t pvst_reset(uint32_t handle)
  * result is a pure function of the input and is independent of how the host
  * partitions its calls -- see src/fixed_block_stream.h.
  */
-int32_t pvst_process(uint32_t handle, const float *input, float *output, uint32_t frames)
+int32_t webvst_process(uint32_t handle, const float *input, float *output, uint32_t frames)
 {
     Slot *slot = resolve(handle);
     if (slot == nullptr)
-        return PVST_ERROR_HANDLE;
+        return WEBVST_ERROR_HANDLE;
     if (output == nullptr)
-        return PVST_ERROR_ARGUMENT;
-    if (frames > slot->maxFrames || frames > PVST_MAX_PROCESS_FRAMES)
-        return PVST_ERROR_FRAME_COUNT;
+        return WEBVST_ERROR_ARGUMENT;
+    if (frames > slot->maxFrames || frames > WEBVST_MAX_PROCESS_FRAMES)
+        return WEBVST_ERROR_FRAME_COUNT;
     if (frames == 0u)
-        return PVST_OK;
+        return WEBVST_OK;
 
     SurgeBlockProcessor processor{slot->synth};
     slot->stream.process(input, output, frames, processor);
-    return PVST_OK;
+    return WEBVST_OK;
 }
 
-int32_t pvst_note_on(uint32_t handle, int32_t note, float velocity)
+int32_t webvst_note_on(uint32_t handle, int32_t note, float velocity)
 {
     Slot *slot = resolve(handle);
     if (slot == nullptr)
-        return PVST_ERROR_HANDLE;
+        return WEBVST_ERROR_HANDLE;
     if (note < 0 || note > 127)
-        return PVST_ERROR_ARGUMENT;
+        return WEBVST_ERROR_ARGUMENT;
     if (!std::isfinite(velocity) || velocity < 0.0f || velocity > 1.0f)
-        return PVST_ERROR_ARGUMENT;
+        return WEBVST_ERROR_ARGUMENT;
     const auto midiVelocity = static_cast<char>(std::lround(velocity * 127.0f));
     slot->synth->playNote(0, static_cast<char>(note), midiVelocity, 0);
-    return PVST_OK;
+    return WEBVST_OK;
 }
 
-int32_t pvst_note_off(uint32_t handle, int32_t note)
+int32_t webvst_note_off(uint32_t handle, int32_t note)
 {
     Slot *slot = resolve(handle);
     if (slot == nullptr)
-        return PVST_ERROR_HANDLE;
+        return WEBVST_ERROR_HANDLE;
     if (note < 0 || note > 127)
-        return PVST_ERROR_ARGUMENT;
+        return WEBVST_ERROR_ARGUMENT;
     slot->synth->releaseNote(0, static_cast<char>(note), 0);
-    return PVST_OK;
+    return WEBVST_OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -521,7 +521,7 @@ int32_t pvst_note_off(uint32_t handle, int32_t note)
  * setParameter01 additionally runs Surge's dependent-control refresh for the
  * parameters that need it, which a raw write into Parameter::val would skip.
  */
-float pvst_param_get(uint32_t handle, uint32_t parameter_id)
+float webvst_param_get(uint32_t handle, uint32_t parameter_id)
 {
     Slot *slot = resolve(handle);
     if (slot == nullptr)
@@ -532,19 +532,19 @@ float pvst_param_get(uint32_t handle, uint32_t parameter_id)
     return sanitizeNormalized(slot->synth->getParameter01(id));
 }
 
-int32_t pvst_param_set(uint32_t handle, uint32_t parameter_id, float normalized)
+int32_t webvst_param_set(uint32_t handle, uint32_t parameter_id, float normalized)
 {
     Slot *slot = resolve(handle);
     if (slot == nullptr)
-        return PVST_ERROR_HANDLE;
+        return WEBVST_ERROR_HANDLE;
     SurgeSynthesizer::ID id;
     if (parameter_id > static_cast<uint32_t>(INT32_MAX) ||
         !slot->synth->fromSynthSideId(static_cast<int>(parameter_id), id))
-        return PVST_ERROR_ARGUMENT;
+        return WEBVST_ERROR_ARGUMENT;
     if (!isValidNormalized(normalized))
-        return PVST_ERROR_ARGUMENT;
+        return WEBVST_ERROR_ARGUMENT;
     slot->synth->setParameter01(id, normalized);
-    return PVST_OK;
+    return WEBVST_OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -555,7 +555,7 @@ int32_t pvst_param_set(uint32_t handle, uint32_t parameter_id, float normalized)
  * State is Surge's own patch blob ("sub3" + patch_header + payload), exactly
  * what saveRaw produces and loadRaw consumes, and exactly what a Surge .fxp
  * carries once its VST2 wrapper is stripped -- which is what lets the preset
- * task hand factory patches straight to pvst_state_load.
+ * task hand factory patches straight to webvst_state_load.
  *
  * SurgePatch::save_patch() reallocates and owns a single `patchptr` member
  * across calls (freed on the next save_patch() or by SurgePatch's destructor):
@@ -564,7 +564,7 @@ int32_t pvst_param_set(uint32_t handle, uint32_t parameter_id, float normalized)
  * same owned buffer with identical contents, since nothing mutates the patch in
  * between.
  */
-uint32_t pvst_state_size(uint32_t handle)
+uint32_t webvst_state_size(uint32_t handle)
 {
     Slot *slot = resolve(handle);
     if (slot == nullptr)
@@ -573,19 +573,19 @@ uint32_t pvst_state_size(uint32_t handle)
     return slot->synth->saveRaw(&data);
 }
 
-int32_t pvst_state_write(uint32_t handle, uint8_t *dst, uint32_t capacity)
+int32_t webvst_state_write(uint32_t handle, uint8_t *dst, uint32_t capacity)
 {
     Slot *slot = resolve(handle);
     if (slot == nullptr)
-        return PVST_ERROR_HANDLE;
+        return WEBVST_ERROR_HANDLE;
     void *data = nullptr;
     const uint32_t size = slot->synth->saveRaw(&data);
     if (data == nullptr)
-        return PVST_ERROR_PLUGIN;
+        return WEBVST_ERROR_PLUGIN;
     if (dst == nullptr || capacity < size)
-        return PVST_ERROR_BUFFER_TOO_SMALL;
+        return WEBVST_ERROR_BUFFER_TOO_SMALL;
     std::memcpy(dst, data, size);
-    return PVST_OK;
+    return WEBVST_OK;
 }
 
 /**
@@ -600,22 +600,22 @@ int32_t pvst_state_write(uint32_t handle, uint8_t *dst, uint32_t capacity)
  * one is out of scope for this wrapper. Hosts must treat state as untrusted
  * (see the SDK's security model).
  */
-int32_t pvst_state_load(uint32_t handle, const uint8_t *src, uint32_t size)
+int32_t webvst_state_load(uint32_t handle, const uint8_t *src, uint32_t size)
 {
     Slot *slot = resolve(handle);
     if (slot == nullptr)
-        return PVST_ERROR_HANDLE;
+        return WEBVST_ERROR_HANDLE;
     if (src == nullptr)
-        return PVST_ERROR_ARGUMENT;
+        return WEBVST_ERROR_ARGUMENT;
     if (size < sizeof(sst::io::patch_header))
-        return PVST_ERROR_ARGUMENT;
+        return WEBVST_ERROR_ARGUMENT;
     if (std::memcmp(src, "sub3", 4) != 0)
-        return PVST_ERROR_ARGUMENT;
+        return WEBVST_ERROR_ARGUMENT;
     slot->synth->loadRaw(src, static_cast<int>(size), false);
     // Drop any audio buffered from the pre-preset patch so it cannot leak past
     // the state change.
     slot->stream.reset();
-    return PVST_OK;
+    return WEBVST_OK;
 }
 
 } // extern "C"
