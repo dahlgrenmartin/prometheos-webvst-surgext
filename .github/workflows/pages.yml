@@ -1,0 +1,126 @@
+name: Build and publish the Surge XT WebVST package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# The published package is what the Buzz plugin loader fetches by URL, so only
+# one deployment may be in flight and a queued run must not cancel it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  EMSCRIPTEN_VERSION: 4.0.10
+  PNPM_VERSION: 9.15.9
+  BUN_VERSION: 1.2.16
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          # Not recursive: scripts/build.ts initialises only the submodules the
+          # JUCE-free engine needs, from a throwaway clone of the pinned commit.
+          submodules: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up pinned pnpm
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare "pnpm@${PNPM_VERSION}" --activate
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up pinned Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSCRIPTEN_VERSION }}
+          actions-cache-folder: emsdk-cache
+
+      - name: Report the pinned toolchain
+        shell: bash
+        run: |
+          echo "pnpm=$(pnpm --version)"
+          echo "bun=$(bun --version)"
+          emcc --version | head -n 1
+
+      - name: Build the WebVST package
+        run: bun scripts/build.ts
+
+      - name: Run the package test suite
+        run: pnpm test
+
+      - name: Verify the pinned upstream sources remain untouched
+        shell: bash
+        run: |
+          git -C vendor/surge diff --exit-code
+          git -C vendor/webvst-sdk diff --exit-code
+
+      - name: Stage the Pages webroot
+        shell: bash
+        run: |
+          mkdir -p _site
+          cp dist/SurgeXT.webvst _site/SurgeXT.webvst
+          cp PROVENANCE.md _site/PROVENANCE.md
+          (cd _site && sha256sum SurgeXT.webvst > SurgeXT.webvst.sha256)
+          cat _site/SurgeXT.webvst.sha256
+          # A plain listing so the deployment root is useful on its own. The
+          # package sits at the webroot so its URL stays short enough to paste.
+          PACKAGE_BYTES="$(stat -c%s _site/SurgeXT.webvst)"
+          cat > _site/index.html <<HTML
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>Surge XT WebVST</title>
+          <h1>Surge XT WebVST</h1>
+          <p>Paste this URL into the Buzz plugin loader's <em>Install URL</em> field:</p>
+          <p><code>${PAGES_BASE}/SurgeXT.webvst</code></p>
+          <ul>
+            <li><a href="SurgeXT.webvst">SurgeXT.webvst</a> (${PACKAGE_BYTES} bytes)</li>
+            <li><a href="SurgeXT.webvst.sha256">SHA-256</a></li>
+            <li><a href="PROVENANCE.md">PROVENANCE.md</a></li>
+          </ul>
+          HTML
+        env:
+          PAGES_BASE: https://dahlgrenmartin.github.io/prometheos-webvst-surgext
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./_site
+
+  deploy:
+    # Only main publishes; pull requests build and test without deploying.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
