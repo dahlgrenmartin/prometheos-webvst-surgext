@@ -30,6 +30,13 @@ jobs:
           # Not recursive: scripts/build.ts initialises only the submodules the
           # JUCE-free engine needs, from a throwaway clone of the pinned commit.
           submodules: true
+          # vendor/webvst-sdk lives in a separate repository. The default
+          # GITHUB_TOKEN is scoped to this repository alone, so while the SDK
+          # repository is private the submodule clone fails with "Repository not
+          # found". Supply SUBMODULE_TOKEN (a PAT or App token with read access
+          # to it) to keep both private; once the SDK repository is public the
+          # default token is enough and the secret can be removed.
+          token: ${{ secrets.SUBMODULE_TOKEN || github.token }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
