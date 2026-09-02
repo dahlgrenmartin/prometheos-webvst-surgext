@@ -15,7 +15,7 @@ include_guard(GLOBAL)
 #
 # Deliberately NOT used: the SDK's prometheos_configure_webvst() helper and its
 # VST3-to-C adapter under src/adapter/. That helper hard-requires
-# PVST_VST3_SDK_DIR because it wraps a real VST3 plugin binary; this package
+# WEBVST_VST3_SOURCE_DIR because it wraps a real VST3 plugin binary; this package
 # re-wraps Surge's engine directly, so it has no VST3 SDK and cannot call it.
 # The SDK offers no no-VST3 variant of the helper, so the link options below
 # are applied here instead -- kept deliberately in step with the helper,
@@ -40,7 +40,7 @@ function(surge_webvst_add_module target)
       "which is kept pristine and unpatched.")
   endif()
 
-  if(NOT SURGE_WEBVST_SDK_DIR OR NOT EXISTS "${SURGE_WEBVST_SDK_DIR}/include/prometheos/webvst.h")
+  if(NOT SURGE_WEBVST_SDK_DIR OR NOT EXISTS "${SURGE_WEBVST_SDK_DIR}/include/webvst/webvst.h")
     message(FATAL_ERROR
       "SURGE_WEBVST_SDK_DIR must point at the WebVST SDK checkout (vendor/webvst-sdk).")
   endif()
@@ -103,7 +103,7 @@ function(surge_webvst_add_module target)
   endif()
 
   # Surge's own default, pinned explicitly because the ABI depends on it:
-  # pvst_process chunks the caller's block into exactly this many frames.
+  # webvst_process chunks the caller's block into exactly this many frames.
   set(SURGE_COMPILE_BLOCK_SIZE 32 CACHE STRING "" FORCE)
 
   # wasm32 pointers are 4 bytes, which trips upstream's "32-bit Linux is
@@ -176,6 +176,6 @@ function(surge_webvst_add_module target)
     -sINITIAL_MEMORY=134217728
     -sSTACK_SIZE=5242880
     ${_surge_webvst_filesystem}
-    "-sEXPORTED_FUNCTIONS=${PROMETHEOS_WEBVST_EXPORTS}"
+    "-sEXPORTED_FUNCTIONS=${WEBVST_EXPORTS}"
   )
 endfunction()

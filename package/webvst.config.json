@@ -10,7 +10,7 @@
 
   "packageId": "org.prometheos.webvst.surgext",
   "version": "0.1.0",
-  "abi": "prometheos-vst3-wasm-1",
+  "abi": "webvst-vst3-wasm-1",
   "modulePath": "plugin.wasm",
 
   "class": {
@@ -19,7 +19,7 @@
       "matches src/surge_webvst.h: kClassUid, kClassName, kClassVendor, and kClassKindInstrument (1u).",
       "There is exactly one class (kClassCount = 1u) at index 0 (kClassIndex = 0u)."
     ],
-    "classUid": "b048fd6e0a4b628de039d7291fa13abd",
+    "classUid": "cccd91e356478c1bc0c5fe2e269e9094",
     "name": "Surge XT",
     "vendor": "Surge Synth Team",
     "kind": "instrument"
@@ -33,7 +33,7 @@
       "which global parameters the module exposes."
     ],
     "name": "Surge XT",
-    "description": "Surge XT, the hybrid synthesizer by the Surge Synth Team, conveyed under GPLv3 behind the Prometheos WebVST ABI v1.",
+    "description": "Surge XT, the hybrid synthesizer by the Surge Synth Team, conveyed under GPLv3 behind the WebVST ABI v1.",
     "trackParameters": [
       {
         "type": "note",

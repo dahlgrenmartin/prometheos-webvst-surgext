@@ -1,8 +1,8 @@
 #pragma once
 
-// Surge XT behind the generic Prometheos WebVST ABI v1.
+// Surge XT behind the generic WebVST ABI v1.
 //
-// <prometheos/webvst.h> (vendor/webvst-sdk) is the authoritative declaration of
+// <webvst/webvst.h> (vendor/webvst-sdk) is the authoritative declaration of
 // every exported symbol; this header adds only the package's own identity and
 // the ABI constants the C header leaves to prose in
 // vendor/webvst-sdk/docs/abi-v1.md.
@@ -13,7 +13,7 @@
 
 #include <cstdint>
 
-#include <prometheos/webvst.h>
+#include <webvst/webvst.h>
 
 namespace surge_webvst
 {
@@ -22,7 +22,7 @@ namespace surge_webvst
 inline constexpr const char *kPackageId = "org.prometheos.webvst.surgext";
 
 /** The ABI identifier the package manifest declares. */
-inline constexpr const char *kAbiId = "prometheos-vst3-wasm-1";
+inline constexpr const char *kAbiId = "webvst-vst3-wasm-1";
 
 /** The immutable Surge XT commit this module is built from (PROVENANCE.md section 1). */
 inline constexpr const char *kSurgePin = "2644c613fb729cf2ce924c39dc75cf6a61ee9324";
@@ -35,7 +35,7 @@ inline constexpr const char *kSurgePin = "2644c613fb729cf2ce924c39dc75cf6a61ee93
  *
  *     uid = first 16 bytes of SHA-256(preimage), lowercase hex
  *     preimage = these four fields joined by "\n", with no trailing newline:
- *         "prometheos-vst3-wasm-1"
+ *         "webvst-vst3-wasm-1"
  *         "org.prometheos.webvst.surgext"
  *         "surge:2644c613fb729cf2ce924c39dc75cf6a61ee9324"
  *         "class:0"
@@ -47,14 +47,14 @@ inline constexpr const char *kSurgePin = "2644c613fb729cf2ce924c39dc75cf6a61ee93
  * needs no SHA-256 implementation; tests/abi_surface.test.ts recomputes the
  * digest independently and fails if this literal ever drifts from it.
  */
-inline constexpr const char *kClassUid = "b048fd6e0a4b628de039d7291fa13abd";
+inline constexpr const char *kClassUid = "cccd91e356478c1bc0c5fe2e269e9094";
 
 /** Display name and vendor for the single exposed class. */
 inline constexpr const char *kClassName = "Surge XT";
 inline constexpr const char *kClassVendor = "Surge Synth Team";
 
 /**
- * `pvst_class_kind` values. abi-v1.md defines these in prose; webvst.h has no
+ * `webvst_class_kind` values. abi-v1.md defines these in prose; webvst.h has no
  * enum for them, so they are named here rather than left as bare literals.
  */
 inline constexpr uint32_t kClassKindEffect = 0u;

@@ -12,8 +12,8 @@ import { fileURLToPath } from "node:url";
  * `build/surgext-webvst.wasm` exactly the way the SDK's own probe
  * (`vendor/webvst-sdk/tools/src/probe.ts`) and package consumer do -- same
  * import allowlist, same WASI environment, `_initialize` before any ABI call --
- * and asserts the generic `pvst_*` contract declared in
- * `vendor/webvst-sdk/include/prometheos/webvst.h`.
+ * and asserts the generic `webvst_*` contract declared in
+ * `vendor/webvst-sdk/include/webvst/webvst.h`.
  *
  * The environment deliberately supplies ONLY `PATH=/usr/bin`, matching the SDK
  * probe. Surge's `SurgeStorage` constructor reads `HOME` and throws when it is
@@ -26,7 +26,7 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const modulePath = join(repoRoot, "build", "surgext-webvst.wasm");
 
 // --- Package identity (must match src/surge_webvst.h) ---------------------------
-const ABI_ID = "prometheos-vst3-wasm-1";
+const ABI_ID = "webvst-vst3-wasm-1";
 const PACKAGE_ID = "org.prometheos.webvst.surgext";
 /**
  * Read from the submodule, never restated as a literal: the class UID is a
@@ -40,15 +40,15 @@ const SURGE_PIN = execFileSync("git", ["rev-parse", "HEAD"], {
 }).trim();
 const CLASS_NAME = "Surge XT";
 const CLASS_VENDOR = "Surge Synth Team";
-const PVST_KIND_INSTRUMENT = 1;
+const WEBVST_KIND_INSTRUMENT = 1;
 
-const PVST_OK = 0;
-const PVST_ERROR_ARGUMENT = -1;
-const PVST_ERROR_HANDLE = -2;
-const PVST_ERROR_FRAME_COUNT = -3;
-const PVST_ERROR_BUFFER_TOO_SMALL = -6;
-const PVST_PARAMETER_AUTOMATABLE = 1;
-const PVST_PARAMETER_READ_ONLY = 2;
+const WEBVST_OK = 0;
+const WEBVST_ERROR_ARGUMENT = -1;
+const WEBVST_ERROR_HANDLE = -2;
+const WEBVST_ERROR_FRAME_COUNT = -3;
+const WEBVST_ERROR_BUFFER_TOO_SMALL = -6;
+const WEBVST_PARAMETER_AUTOMATABLE = 1;
+const WEBVST_PARAMETER_READ_ONLY = 2;
 
 /**
  * The class UID is a pure function of pinned inputs -- no randomness, no clock.
@@ -77,8 +77,8 @@ function sdkImportAllowlist(): Set<string> {
 /** Likewise for the exported-symbol list the SDK's link step installs. */
 function sdkExportedFunctions(): Set<string> {
   const source = readFileSync(join(repoRoot, "vendor/webvst-sdk/cmake/WebVstExports.cmake"), "utf8");
-  const block = /PROMETHEOS_WEBVST_EXPORTS\s*\r?\n\s*"\[([\s\S]*?)\]"/.exec(source);
-  if (!block) throw new Error("could not read PROMETHEOS_WEBVST_EXPORTS from the SDK");
+  const block = /WEBVST_EXPORTS\s*\r?\n\s*"\[([\s\S]*?)\]"/.exec(source);
+  if (!block) throw new Error("could not read WEBVST_EXPORTS from the SDK");
   const entries = [...block[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
   if (entries.length === 0) throw new Error("SDK export list parsed empty");
   // EXPORTED_FUNCTIONS names carry Emscripten's leading underscore; the wasm
@@ -185,7 +185,7 @@ function readAbiString(
   const pointer = abi.malloc(size);
   expect(pointer, `${label}: malloc`).not.toBe(0);
   try {
-    expect(write(pointer, size), `${label}: write`).toBe(PVST_OK);
+    expect(write(pointer, size), `${label}: write`).toBe(WEBVST_OK);
     const copy = abi.bytes().slice(pointer, pointer + size);
     return new TextDecoder("utf-8", { fatal: true }).decode(copy);
   } finally {
@@ -194,21 +194,21 @@ function readAbiString(
 }
 
 function classString(abi: AbiInstance, kind: "uid" | "name" | "vendor", classIndex = 0): string {
-  const size = abi.fn(`pvst_class_${kind}_size`)(classIndex) >>> 0;
+  const size = abi.fn(`webvst_class_${kind}_size`)(classIndex) >>> 0;
   return readAbiString(
     abi,
     size,
-    (pointer, capacity) => abi.fn(`pvst_class_${kind}_write`)(classIndex, pointer, capacity),
+    (pointer, capacity) => abi.fn(`webvst_class_${kind}_write`)(classIndex, pointer, capacity),
     `class ${kind}`,
   );
 }
 
 function paramTitle(abi: AbiInstance, index: number): string {
-  const size = abi.fn("pvst_class_param_title_size")(0, index) >>> 0;
+  const size = abi.fn("webvst_class_param_title_size")(0, index) >>> 0;
   return readAbiString(
     abi,
     size,
-    (pointer, capacity) => abi.fn("pvst_class_param_title_write")(0, index, pointer, capacity),
+    (pointer, capacity) => abi.fn("webvst_class_param_title_write")(0, index, pointer, capacity),
     `parameter ${index} title`,
   );
 }
@@ -219,11 +219,11 @@ function paramTitle(abi: AbiInstance, index: number): string {
  * such parameter is used so the choice is deterministic.
  */
 function continuousParameter(abi: AbiInstance): number {
-  const count = abi.fn("pvst_class_param_count")(0) >>> 0;
+  const count = abi.fn("webvst_class_param_count")(0) >>> 0;
   for (let index = 0; index < count; index += 1) {
     if (
-      (abi.fn("pvst_class_param_step_count")(0, index) >>> 0) === 0 &&
-      ((abi.fn("pvst_class_param_flags")(0, index) >>> 0) & PVST_PARAMETER_AUTOMATABLE) !== 0
+      (abi.fn("webvst_class_param_step_count")(0, index) >>> 0) === 0 &&
+      ((abi.fn("webvst_class_param_flags")(0, index) >>> 0) & WEBVST_PARAMETER_AUTOMATABLE) !== 0
     ) {
       return index;
     }
@@ -232,12 +232,12 @@ function continuousParameter(abi: AbiInstance): number {
 }
 
 function paramValueText(abi: AbiInstance, index: number, normalized: number): string {
-  const size = abi.fn("pvst_class_param_value_text_size")(0, index, normalized) >>> 0;
+  const size = abi.fn("webvst_class_param_value_text_size")(0, index, normalized) >>> 0;
   return readAbiString(
     abi,
     size,
     (pointer, capacity) =>
-      abi.fn("pvst_class_param_value_text_write")(0, index, normalized, pointer, capacity),
+      abi.fn("webvst_class_param_value_text_write")(0, index, normalized, pointer, capacity),
     `parameter ${index} value text`,
   );
 }
@@ -327,8 +327,8 @@ describe("Surge XT WebVST ABI v1 surface", () => {
 
   it("reports ABI version 1 and exactly one class", () => {
     const abi = instantiate();
-    expect(abi.fn("pvst_abi_version")() >>> 0).toBe(1);
-    expect(abi.fn("pvst_class_count")() >>> 0).toBe(1);
+    expect(abi.fn("webvst_abi_version")() >>> 0).toBe(1);
+    expect(abi.fn("webvst_class_count")() >>> 0).toBe(1);
   });
 
   it("emits the deterministic class UID in canonical lowercase hex", () => {
@@ -336,25 +336,25 @@ describe("Surge XT WebVST ABI v1 surface", () => {
     const uid = classString(abi, "uid");
     expect(uid).toMatch(/^[0-9a-f]{32}$/);
     expect(uid).toBe(EXPECTED_CLASS_UID);
-    expect(abi.fn("pvst_class_uid_size")(0) >>> 0).toBe(32);
+    expect(abi.fn("webvst_class_uid_size")(0) >>> 0).toBe(32);
     // Out-of-range classes are inert, not a trap.
-    expect(abi.fn("pvst_class_uid_size")(1) >>> 0).toBe(0);
-    expect(abi.fn("pvst_class_uid_write")(1, 0, 0)).toBe(PVST_ERROR_ARGUMENT);
+    expect(abi.fn("webvst_class_uid_size")(1) >>> 0).toBe(0);
+    expect(abi.fn("webvst_class_uid_write")(1, 0, 0)).toBe(WEBVST_ERROR_ARGUMENT);
   });
 
   it("names the class, its vendor, and reports the instrument kind", () => {
     const abi = instantiate();
     expect(classString(abi, "name")).toBe(CLASS_NAME);
     expect(classString(abi, "vendor")).toBe(CLASS_VENDOR);
-    expect(abi.fn("pvst_class_kind")(0) >>> 0).toBe(PVST_KIND_INSTRUMENT);
+    expect(abi.fn("webvst_class_kind")(0) >>> 0).toBe(WEBVST_KIND_INSTRUMENT);
   });
 
   it("refuses to write a string into a buffer that is too small", () => {
     const abi = instantiate();
-    expect(abi.fn("pvst_class_name_write")(0, 0, 4096)).toBe(PVST_ERROR_BUFFER_TOO_SMALL);
+    expect(abi.fn("webvst_class_name_write")(0, 0, 4096)).toBe(WEBVST_ERROR_BUFFER_TOO_SMALL);
     const pointer = abi.malloc(4);
     try {
-      expect(abi.fn("pvst_class_name_write")(0, pointer, 1)).toBe(PVST_ERROR_BUFFER_TOO_SMALL);
+      expect(abi.fn("webvst_class_name_write")(0, pointer, 1)).toBe(WEBVST_ERROR_BUFFER_TOO_SMALL);
     } finally {
       abi.free(pointer);
     }
@@ -362,28 +362,28 @@ describe("Surge XT WebVST ABI v1 surface", () => {
 
   it("answers class parameter metadata without any live instance", () => {
     const abi = instantiate();
-    const count = abi.fn("pvst_class_param_count")(0) >>> 0;
+    const count = abi.fn("webvst_class_param_count")(0) >>> 0;
     expect(count).toBeGreaterThan(0);
-    expect(abi.fn("pvst_class_param_count")(1) >>> 0).toBe(0);
+    expect(abi.fn("webvst_class_param_count")(1) >>> 0).toBe(0);
 
     const ids = new Set<number>();
     let titled = 0;
     let discrete = 0;
     for (let index = 0; index < count; index += 1) {
-      const id = abi.fn("pvst_class_param_id")(0, index) >>> 0;
+      const id = abi.fn("webvst_class_param_id")(0, index) >>> 0;
       // Stable Surge parameter IDs: the flat patch-parameter index.
       expect(id, `parameter ${index} id`).toBe(index);
       expect(ids.has(id), `parameter ${id} is unique`).toBe(false);
       ids.add(id);
 
-      const flags = abi.fn("pvst_class_param_flags")(0, index) >>> 0;
-      expect(flags & ~(PVST_PARAMETER_AUTOMATABLE | PVST_PARAMETER_READ_ONLY)).toBe(0);
+      const flags = abi.fn("webvst_class_param_flags")(0, index) >>> 0;
+      expect(flags & ~(WEBVST_PARAMETER_AUTOMATABLE | WEBVST_PARAMETER_READ_ONLY)).toBe(0);
 
-      const stepCount = abi.fn("pvst_class_param_step_count")(0, index) >>> 0;
+      const stepCount = abi.fn("webvst_class_param_step_count")(0, index) >>> 0;
       expect(stepCount).toBeLessThanOrEqual(65534);
       if (stepCount > 0) discrete += 1;
 
-      const defaultValue = abi.fn("pvst_class_param_default")(0, index);
+      const defaultValue = abi.fn("webvst_class_param_default")(0, index);
       expect(Number.isFinite(defaultValue), `parameter ${index} default is finite`).toBe(true);
       expect(defaultValue).toBeGreaterThanOrEqual(0);
       expect(defaultValue).toBeLessThanOrEqual(1);
@@ -392,15 +392,15 @@ describe("Surge XT WebVST ABI v1 surface", () => {
     }
     expect(titled).toBe(count);
     expect(discrete).toBeGreaterThan(0);
-    expect(abi.fn("pvst_class_param_title_write")(0, count, 0, 0)).toBe(PVST_ERROR_ARGUMENT);
+    expect(abi.fn("webvst_class_param_title_write")(0, count, 0, 0)).toBe(WEBVST_ERROR_ARGUMENT);
   });
 
   it("renders value text for both ends of a discrete parameter", () => {
     const abi = instantiate();
-    const count = abi.fn("pvst_class_param_count")(0) >>> 0;
+    const count = abi.fn("webvst_class_param_count")(0) >>> 0;
     let checked = 0;
     for (let index = 0; index < count && checked < 8; index += 1) {
-      const stepCount = abi.fn("pvst_class_param_step_count")(0, index) >>> 0;
+      const stepCount = abi.fn("webvst_class_param_step_count")(0, index) >>> 0;
       if (stepCount === 0) continue;
       expect(paramValueText(abi, index, 0).length).toBeGreaterThan(0);
       expect(paramValueText(abi, index, 1).length).toBeGreaterThan(0);
@@ -411,93 +411,93 @@ describe("Surge XT WebVST ABI v1 surface", () => {
 
   it("creates, resets, and destroys an instance", () => {
     const abi = instantiate();
-    const handle = abi.fn("pvst_create")(0, 48_000, 128) >>> 0;
+    const handle = abi.fn("webvst_create")(0, 48_000, 128) >>> 0;
     expect(handle).not.toBe(0);
-    expect(abi.fn("pvst_reset")(handle)).toBe(PVST_OK);
-    abi.fn("pvst_destroy")(handle);
+    expect(abi.fn("webvst_reset")(handle)).toBe(WEBVST_OK);
+    abi.fn("webvst_destroy")(handle);
     // The handle is stale now, not merely unknown.
-    expect(abi.fn("pvst_reset")(handle)).toBe(PVST_ERROR_HANDLE);
-    expect(abi.fn("pvst_reset")(0)).toBe(PVST_ERROR_HANDLE);
+    expect(abi.fn("webvst_reset")(handle)).toBe(WEBVST_ERROR_HANDLE);
+    expect(abi.fn("webvst_reset")(0)).toBe(WEBVST_ERROR_HANDLE);
   });
 
   it("rejects out-of-contract create arguments", () => {
     const abi = instantiate();
-    expect(abi.fn("pvst_create")(1, 48_000, 128) >>> 0).toBe(0);
-    expect(abi.fn("pvst_create")(0, 0, 128) >>> 0).toBe(0);
-    expect(abi.fn("pvst_create")(0, -48_000, 128) >>> 0).toBe(0);
-    expect(abi.fn("pvst_create")(0, Number.NaN, 128) >>> 0).toBe(0);
-    expect(abi.fn("pvst_create")(0, Number.POSITIVE_INFINITY, 128) >>> 0).toBe(0);
-    expect(abi.fn("pvst_create")(0, 48_000, 0) >>> 0).toBe(0);
-    expect(abi.fn("pvst_create")(0, 48_000, 129) >>> 0).toBe(0);
+    expect(abi.fn("webvst_create")(1, 48_000, 128) >>> 0).toBe(0);
+    expect(abi.fn("webvst_create")(0, 0, 128) >>> 0).toBe(0);
+    expect(abi.fn("webvst_create")(0, -48_000, 128) >>> 0).toBe(0);
+    expect(abi.fn("webvst_create")(0, Number.NaN, 128) >>> 0).toBe(0);
+    expect(abi.fn("webvst_create")(0, Number.POSITIVE_INFINITY, 128) >>> 0).toBe(0);
+    expect(abi.fn("webvst_create")(0, 48_000, 0) >>> 0).toBe(0);
+    expect(abi.fn("webvst_create")(0, 48_000, 129) >>> 0).toBe(0);
   });
 
   it("round-trips normalized parameter values through a handle", () => {
     const abi = instantiate();
-    const handle = abi.fn("pvst_create")(0, 48_000, 128) >>> 0;
+    const handle = abi.fn("webvst_create")(0, 48_000, 128) >>> 0;
     expect(handle).not.toBe(0);
     try {
-      const count = abi.fn("pvst_class_param_count")(0) >>> 0;
+      const count = abi.fn("webvst_class_param_count")(0) >>> 0;
       const target = continuousParameter(abi);
 
-      expect(abi.fn("pvst_param_set")(handle, target, 0.75)).toBe(PVST_OK);
-      expect(abi.fn("pvst_param_get")(handle, target)).toBeCloseTo(0.75, 4);
-      expect(abi.fn("pvst_param_set")(handle, target, 0)).toBe(PVST_OK);
-      expect(abi.fn("pvst_param_get")(handle, target)).toBeCloseTo(0, 5);
+      expect(abi.fn("webvst_param_set")(handle, target, 0.75)).toBe(WEBVST_OK);
+      expect(abi.fn("webvst_param_get")(handle, target)).toBeCloseTo(0.75, 4);
+      expect(abi.fn("webvst_param_set")(handle, target, 0)).toBe(WEBVST_OK);
+      expect(abi.fn("webvst_param_get")(handle, target)).toBeCloseTo(0, 5);
 
-      expect(abi.fn("pvst_param_set")(handle, target, 1.5)).toBe(PVST_ERROR_ARGUMENT);
-      expect(abi.fn("pvst_param_set")(handle, target, Number.NaN)).toBe(PVST_ERROR_ARGUMENT);
-      expect(abi.fn("pvst_param_set")(handle, count, 0.5)).toBe(PVST_ERROR_ARGUMENT);
-      expect(abi.fn("pvst_param_set")(0, target, 0.5)).toBe(PVST_ERROR_HANDLE);
-      expect(abi.fn("pvst_param_get")(handle, count)).toBe(0);
+      expect(abi.fn("webvst_param_set")(handle, target, 1.5)).toBe(WEBVST_ERROR_ARGUMENT);
+      expect(abi.fn("webvst_param_set")(handle, target, Number.NaN)).toBe(WEBVST_ERROR_ARGUMENT);
+      expect(abi.fn("webvst_param_set")(handle, count, 0.5)).toBe(WEBVST_ERROR_ARGUMENT);
+      expect(abi.fn("webvst_param_set")(0, target, 0.5)).toBe(WEBVST_ERROR_HANDLE);
+      expect(abi.fn("webvst_param_get")(handle, count)).toBe(0);
     } finally {
-      abi.fn("pvst_destroy")(handle);
+      abi.fn("webvst_destroy")(handle);
     }
   });
 
   it("processes arbitrary host block sizes and produces audio after a note-on", () => {
     const abi = instantiate();
-    const handle = abi.fn("pvst_create")(0, 48_000, 128) >>> 0;
+    const handle = abi.fn("webvst_create")(0, 48_000, 128) >>> 0;
     expect(handle).not.toBe(0);
     const frames = 128;
     const output = abi.malloc(frames * 2 * 4);
     expect(output).not.toBe(0);
     try {
       // input == NULL is the normal instrument case: silence.
-      expect(abi.fn("pvst_process")(handle, 0, output, 0)).toBe(PVST_OK);
-      expect(abi.fn("pvst_process")(handle, 0, output, frames)).toBe(PVST_OK);
+      expect(abi.fn("webvst_process")(handle, 0, output, 0)).toBe(WEBVST_OK);
+      expect(abi.fn("webvst_process")(handle, 0, output, frames)).toBe(WEBVST_OK);
       // Any 1..128 span is accepted now: the fixed-block FIFO adapts them to
       // Surge's 32-frame engine block.
-      expect(abi.fn("pvst_process")(handle, 0, output, 1)).toBe(PVST_OK);
-      expect(abi.fn("pvst_process")(handle, 0, output, 31)).toBe(PVST_OK);
-      expect(abi.fn("pvst_process")(handle, 0, output, 33)).toBe(PVST_OK);
-      expect(abi.fn("pvst_process")(handle, 0, output, 127)).toBe(PVST_OK);
-      // Still capped: 160 > PVST_MAX_PROCESS_FRAMES (128).
-      expect(abi.fn("pvst_process")(handle, 0, output, 160)).toBe(PVST_ERROR_FRAME_COUNT);
-      expect(abi.fn("pvst_process")(handle, 0, 0, frames)).toBe(PVST_ERROR_ARGUMENT);
-      expect(abi.fn("pvst_process")(0, 0, output, frames)).toBe(PVST_ERROR_HANDLE);
+      expect(abi.fn("webvst_process")(handle, 0, output, 1)).toBe(WEBVST_OK);
+      expect(abi.fn("webvst_process")(handle, 0, output, 31)).toBe(WEBVST_OK);
+      expect(abi.fn("webvst_process")(handle, 0, output, 33)).toBe(WEBVST_OK);
+      expect(abi.fn("webvst_process")(handle, 0, output, 127)).toBe(WEBVST_OK);
+      // Still capped: 160 > WEBVST_MAX_PROCESS_FRAMES (128).
+      expect(abi.fn("webvst_process")(handle, 0, output, 160)).toBe(WEBVST_ERROR_FRAME_COUNT);
+      expect(abi.fn("webvst_process")(handle, 0, 0, frames)).toBe(WEBVST_ERROR_ARGUMENT);
+      expect(abi.fn("webvst_process")(0, 0, output, frames)).toBe(WEBVST_ERROR_HANDLE);
 
-      expect(abi.fn("pvst_note_on")(handle, 60, 0.8)).toBe(PVST_OK);
-      expect(abi.fn("pvst_note_on")(handle, 128, 0.8)).toBe(PVST_ERROR_ARGUMENT);
-      expect(abi.fn("pvst_note_on")(handle, -1, 0.8)).toBe(PVST_ERROR_ARGUMENT);
-      expect(abi.fn("pvst_note_on")(handle, 60, 2)).toBe(PVST_ERROR_ARGUMENT);
+      expect(abi.fn("webvst_note_on")(handle, 60, 0.8)).toBe(WEBVST_OK);
+      expect(abi.fn("webvst_note_on")(handle, 128, 0.8)).toBe(WEBVST_ERROR_ARGUMENT);
+      expect(abi.fn("webvst_note_on")(handle, -1, 0.8)).toBe(WEBVST_ERROR_ARGUMENT);
+      expect(abi.fn("webvst_note_on")(handle, 60, 2)).toBe(WEBVST_ERROR_ARGUMENT);
 
       let peak = 0;
       for (let block = 0; block < 32; block += 1) {
-        expect(abi.fn("pvst_process")(handle, 0, output, frames)).toBe(PVST_OK);
+        expect(abi.fn("webvst_process")(handle, 0, output, frames)).toBe(WEBVST_OK);
         const samples = new Float32Array(abi.memory.buffer, output, frames * 2);
         for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
       }
       expect(peak).toBeGreaterThan(1e-4);
-      expect(abi.fn("pvst_note_off")(handle, 60)).toBe(PVST_OK);
+      expect(abi.fn("webvst_note_off")(handle, 60)).toBe(WEBVST_OK);
     } finally {
       abi.free(output);
-      abi.fn("pvst_destroy")(handle);
+      abi.fn("webvst_destroy")(handle);
     }
   }, 60_000);
 
   it("saves and restores a changed parameter, not just a constant-sized blob", () => {
     const abi = instantiate();
-    const handle = abi.fn("pvst_create")(0, 48_000, 128) >>> 0;
+    const handle = abi.fn("webvst_create")(0, 48_000, 128) >>> 0;
     expect(handle).not.toBe(0);
     try {
       const target = continuousParameter(abi);
@@ -505,67 +505,67 @@ describe("Surge XT WebVST ABI v1 surface", () => {
       const overwritten = 0.8;
 
       // Snapshot a patch that DIFFERS from the default. Asserting only that the
-      // state size is unchanged across a load would pass even if pvst_state_load
+      // state size is unchanged across a load would pass even if webvst_state_load
       // did nothing at all: the init patch's size is constant. Task 4 feeds real
       // preset payloads through this same path, so it has to actually load.
-      expect(abi.fn("pvst_param_set")(handle, target, saved)).toBe(PVST_OK);
-      expect(abi.fn("pvst_param_get")(handle, target)).toBeCloseTo(saved, 4);
+      expect(abi.fn("webvst_param_set")(handle, target, saved)).toBe(WEBVST_OK);
+      expect(abi.fn("webvst_param_get")(handle, target)).toBeCloseTo(saved, 4);
 
-      const size = abi.fn("pvst_state_size")(handle) >>> 0;
+      const size = abi.fn("webvst_state_size")(handle) >>> 0;
       expect(size).toBeGreaterThan(0);
       const pointer = abi.malloc(size);
       expect(pointer).not.toBe(0);
       try {
-        expect(abi.fn("pvst_state_write")(handle, pointer, size)).toBe(PVST_OK);
+        expect(abi.fn("webvst_state_write")(handle, pointer, size)).toBe(WEBVST_OK);
         const state = abi.bytes().slice(pointer, pointer + size);
         // Surge's own patch envelope.
         expect(new TextDecoder().decode(state.subarray(0, 4))).toBe("sub3");
-        expect(abi.fn("pvst_state_write")(handle, pointer, size - 1)).toBe(PVST_ERROR_BUFFER_TOO_SMALL);
-        expect(abi.fn("pvst_state_write")(handle, 0, size)).toBe(PVST_ERROR_BUFFER_TOO_SMALL);
+        expect(abi.fn("webvst_state_write")(handle, pointer, size - 1)).toBe(WEBVST_ERROR_BUFFER_TOO_SMALL);
+        expect(abi.fn("webvst_state_write")(handle, 0, size)).toBe(WEBVST_ERROR_BUFFER_TOO_SMALL);
 
         // Move the parameter away, then restore the snapshot over it.
-        expect(abi.fn("pvst_param_set")(handle, target, overwritten)).toBe(PVST_OK);
-        expect(abi.fn("pvst_param_get")(handle, target)).toBeCloseTo(overwritten, 4);
+        expect(abi.fn("webvst_param_set")(handle, target, overwritten)).toBe(WEBVST_OK);
+        expect(abi.fn("webvst_param_get")(handle, target)).toBeCloseTo(overwritten, 4);
 
-        expect(abi.fn("pvst_state_load")(handle, pointer, size)).toBe(PVST_OK);
-        expect(abi.fn("pvst_param_get")(handle, target)).toBeCloseTo(saved, 4);
-        expect(abi.fn("pvst_state_size")(handle) >>> 0).toBe(size);
+        expect(abi.fn("webvst_state_load")(handle, pointer, size)).toBe(WEBVST_OK);
+        expect(abi.fn("webvst_param_get")(handle, target)).toBeCloseTo(saved, 4);
+        expect(abi.fn("webvst_state_size")(handle) >>> 0).toBe(size);
       } finally {
         abi.free(pointer);
       }
     } finally {
-      abi.fn("pvst_destroy")(handle);
+      abi.fn("webvst_destroy")(handle);
     }
   }, 60_000);
 
   it("rejects a malformed state blob without disturbing the instance", () => {
     const abi = instantiate();
-    const handle = abi.fn("pvst_create")(0, 48_000, 128) >>> 0;
+    const handle = abi.fn("webvst_create")(0, 48_000, 128) >>> 0;
     expect(handle).not.toBe(0);
     try {
       const target = continuousParameter(abi);
       const kept = 0.25;
-      expect(abi.fn("pvst_param_set")(handle, target, kept)).toBe(PVST_OK);
-      const before = abi.fn("pvst_state_size")(handle) >>> 0;
+      expect(abi.fn("webvst_param_set")(handle, target, kept)).toBe(WEBVST_OK);
+      const before = abi.fn("webvst_state_size")(handle) >>> 0;
 
       const junk = abi.malloc(64);
       expect(junk).not.toBe(0);
       try {
         abi.bytes().fill(0x41, junk, junk + 64);
-        expect(abi.fn("pvst_state_load")(handle, junk, 64)).toBe(PVST_ERROR_ARGUMENT);
-        expect(abi.fn("pvst_state_load")(handle, junk, 2)).toBe(PVST_ERROR_ARGUMENT);
-        expect(abi.fn("pvst_state_load")(handle, 0, 64)).toBe(PVST_ERROR_ARGUMENT);
-        expect(abi.fn("pvst_state_load")(0, junk, 64)).toBe(PVST_ERROR_HANDLE);
+        expect(abi.fn("webvst_state_load")(handle, junk, 64)).toBe(WEBVST_ERROR_ARGUMENT);
+        expect(abi.fn("webvst_state_load")(handle, junk, 2)).toBe(WEBVST_ERROR_ARGUMENT);
+        expect(abi.fn("webvst_state_load")(handle, 0, 64)).toBe(WEBVST_ERROR_ARGUMENT);
+        expect(abi.fn("webvst_state_load")(0, junk, 64)).toBe(WEBVST_ERROR_HANDLE);
       } finally {
         abi.free(junk);
       }
 
-      expect(abi.fn("pvst_state_size")(handle) >>> 0).toBe(before);
+      expect(abi.fn("webvst_state_size")(handle) >>> 0).toBe(before);
       // loadRaw resets the live patch before parsing, so a rejected blob that
       // reached it would silently wipe the instance. It must still read back.
-      expect(abi.fn("pvst_param_get")(handle, target)).toBeCloseTo(kept, 4);
+      expect(abi.fn("webvst_param_get")(handle, target)).toBeCloseTo(kept, 4);
     } finally {
-      abi.fn("pvst_destroy")(handle);
+      abi.fn("webvst_destroy")(handle);
     }
   }, 60_000);
 });

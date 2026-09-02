@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
  * Variable-partition equivalence for the Surge XT WebVST module.
  *
  * Task 3 puts a sample-accurate fixed-block FIFO in front of Surge's engine so
- * `pvst_process` accepts any 0..128-frame host block while still driving Surge
+ * `webvst_process` accepts any 0..128-frame host block while still driving Surge
  * only in exact 32-frame blocks. The property that buys is: the output stream
  * is a pure function of the input and does NOT depend on how the host chops its
  * calls.
@@ -21,8 +21,8 @@ import { fileURLToPath } from "node:url";
  * click/fade filter: only the first 32 frames (the latency the FIFO is defined
  * to introduce) are excluded.
  *
- * Against the Task-2 module this is RED: `pvst_process` there rejects any frame
- * count that is not a multiple of 32 (`PVST_ERROR_FRAME_COUNT`). After Step 5's
+ * Against the Task-2 module this is RED: `webvst_process` there rejects any frame
+ * count that is not a multiple of 32 (`WEBVST_ERROR_FRAME_COUNT`). After Step 5's
  * rebuild it is GREEN.
  */
 
@@ -30,7 +30,7 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const modulePath = join(repoRoot, "build", "surgext-webvst.wasm");
 const factoryPatchesDir = join(repoRoot, "vendor", "surge", "resources", "data", "patches_factory");
 
-const PVST_OK = 0;
+const WEBVST_OK = 0;
 
 const CHANNELS = 2;
 /** The FIFO's defining initial latency, in frames. Task 3 fixes this at one 32-frame block. */
@@ -44,7 +44,7 @@ const TOTAL_FRAMES = 2048;
 const BLOCKS_32_PARTITION = [32];
 /** Buzz supplies arbitrary sub-block spans around tick boundaries. */
 const RAGGED_PARTITION = [7, 13, 1, 64, 3, 128];
-/** The largest single call the ABI accepts (PVST_MAX_PROCESS_FRAMES). */
+/** The largest single call the ABI accepts (WEBVST_MAX_PROCESS_FRAMES). */
 const MAX_BLOCK_PARTITION = [128];
 
 // Exactly the import surface tests/abi_surface.test.ts uses: the SDK probe's
@@ -152,7 +152,7 @@ function listFilesRecursive(dir: string): string[] {
  * factory category directories, take index 0; read that category recursively,
  * keep `*.fxp`, sort, take index 0; strip the 60-byte VST2 FXP wrapper inline
  * and return the Surge patch payload (`sub3` + header + data) that
- * `pvst_state_load` consumes.
+ * `webvst_state_load` consumes.
  */
 function firstFactoryPresetPayload(): { category: string; preset: string; payload: Uint8Array } {
   const categories = readdirSync(factoryPatchesDir, { withFileTypes: true })
@@ -181,28 +181,28 @@ function firstFactoryPresetPayload(): { category: string; preset: string; payloa
 
 /** A fresh instrument on a fresh handle: preset loaded, one low note held, nothing rendered yet. */
 function newVoice(abi: AbiInstance, payload: Uint8Array): number {
-  const handle = abi.fn("pvst_create")(0, SAMPLE_RATE, MAX_FRAMES) >>> 0;
-  expect(handle, "pvst_create").not.toBe(0);
+  const handle = abi.fn("webvst_create")(0, SAMPLE_RATE, MAX_FRAMES) >>> 0;
+  expect(handle, "webvst_create").not.toBe(0);
 
   const statePtr = abi.malloc(payload.length);
   expect(statePtr, "malloc(state)").not.toBe(0);
   try {
     abi.bytes().set(payload, statePtr);
-    expect(abi.fn("pvst_state_load")(handle, statePtr, payload.length), "pvst_state_load").toBe(PVST_OK);
+    expect(abi.fn("webvst_state_load")(handle, statePtr, payload.length), "webvst_state_load").toBe(WEBVST_OK);
   } finally {
     abi.free(statePtr);
   }
 
-  expect(abi.fn("pvst_note_on")(handle, LOW_NOTE, 1.0), "pvst_note_on").toBe(PVST_OK);
+  expect(abi.fn("webvst_note_on")(handle, LOW_NOTE, 1.0), "webvst_note_on").toBe(WEBVST_OK);
   return handle;
 }
 
 /**
  * Render `TOTAL_FRAMES` interleaved stereo frames from `handle`, chopping the
  * span into `partition` (repeating). Only the final call is trimmed so the
- * render lands exactly on `TOTAL_FRAMES`. Every `pvst_process` call must return
- * `PVST_OK` -- on a module that still requires 32-frame host blocks, a call of 7
- * frames returns `PVST_ERROR_FRAME_COUNT` and this fails.
+ * render lands exactly on `TOTAL_FRAMES`. Every `webvst_process` call must return
+ * `WEBVST_OK` -- on a module that still requires 32-frame host blocks, a call of 7
+ * frames returns `WEBVST_ERROR_FRAME_COUNT` and this fails.
  */
 function render(abi: AbiInstance, handle: number, partition: number[]): Float32Array {
   const out = new Float32Array(TOTAL_FRAMES * CHANNELS);
@@ -214,8 +214,8 @@ function render(abi: AbiInstance, handle: number, partition: number[]): Float32A
     while (done < TOTAL_FRAMES) {
       let want = partition[step % partition.length];
       if (want > TOTAL_FRAMES - done) want = TOTAL_FRAMES - done;
-      const rc = abi.fn("pvst_process")(handle, 0, scratch, want);
-      expect(rc, `pvst_process(frames=${want})`).toBe(PVST_OK);
+      const rc = abi.fn("webvst_process")(handle, 0, scratch, want);
+      expect(rc, `webvst_process(frames=${want})`).toBe(WEBVST_OK);
       out.set(new Float32Array(abi.memory.buffer, scratch, want * CHANNELS), done * CHANNELS);
       done += want;
       step += 1;
@@ -287,7 +287,7 @@ describe("Surge XT WebVST arbitrary host-block partitioning", () => {
       expect(firstDiff(ragged, "ragged [7,13,1,64,3,128] repeating"), "ragged vs 32-frame calls").toBe("");
       expect(firstDiff(maxBlocks, "max 128-frame blocks"), "128-frame blocks vs 32-frame calls").toBe("");
     } finally {
-      for (const handle of [h32, hRagged, hMax]) abi.fn("pvst_destroy")(handle);
+      for (const handle of [h32, hRagged, hMax]) abi.fn("webvst_destroy")(handle);
     }
   }, 60_000);
 
@@ -295,13 +295,13 @@ describe("Surge XT WebVST arbitrary host-block partitioning", () => {
     const abi = instantiate();
     const { payload } = firstFactoryPresetPayload();
 
-    const handle = abi.fn("pvst_create")(0, SAMPLE_RATE, MAX_FRAMES) >>> 0;
-    expect(handle, "pvst_create").not.toBe(0);
+    const handle = abi.fn("webvst_create")(0, SAMPLE_RATE, MAX_FRAMES) >>> 0;
+    expect(handle, "webvst_create").not.toBe(0);
     const scratch = abi.malloc(MAX_FRAMES * CHANNELS * 4);
     expect(scratch, "malloc(scratch)").not.toBe(0);
 
     const process = (frames: number) => {
-      expect(abi.fn("pvst_process")(handle, 0, scratch, frames), `pvst_process(${frames})`).toBe(PVST_OK);
+      expect(abi.fn("webvst_process")(handle, 0, scratch, frames), `webvst_process(${frames})`).toBe(WEBVST_OK);
       return Array.from(new Float32Array(abi.memory.buffer, scratch, frames * CHANNELS));
     };
     const peakOf = (buf: number[]) => buf.reduce((m, s) => Math.max(m, Math.abs(s)), 0);
@@ -310,7 +310,7 @@ describe("Surge XT WebVST arbitrary host-block partitioning", () => {
       expect(p, "malloc(state)").not.toBe(0);
       try {
         abi.bytes().set(payload, p);
-        expect(abi.fn("pvst_state_load")(handle, p, payload.length), "pvst_state_load").toBe(PVST_OK);
+        expect(abi.fn("webvst_state_load")(handle, p, payload.length), "webvst_state_load").toBe(WEBVST_OK);
       } finally {
         abi.free(p);
       }
@@ -318,7 +318,7 @@ describe("Surge XT WebVST arbitrary host-block partitioning", () => {
 
     try {
       // Fill the FIFO with real buffered tail audio (its ready block is non-zero).
-      expect(abi.fn("pvst_note_on")(handle, 60, 1.0), "pvst_note_on").toBe(PVST_OK);
+      expect(abi.fn("webvst_note_on")(handle, 60, 1.0), "webvst_note_on").toBe(WEBVST_OK);
       let tail: number[] = [];
       for (let i = 0; i < 8; i += 1) tail = process(128);
       expect(peakOf(tail), "FIFO holds real buffered audio before the state change").toBeGreaterThan(1e-4);
@@ -328,22 +328,22 @@ describe("Surge XT WebVST arbitrary host-block partitioning", () => {
       loadState();
       expect(
         process(FIFO_LATENCY_FRAMES).every((s) => s === 0),
-        "32 frames after pvst_state_load are the re-primed FIFO (exact silence)",
+        "32 frames after webvst_state_load are the re-primed FIFO (exact silence)",
       ).toBe(true);
 
-      // Same guarantee for pvst_reset. loadRaw stopped the note, so start a new
+      // Same guarantee for webvst_reset. loadRaw stopped the note, so start a new
       // one and refill the FIFO with audio first.
-      expect(abi.fn("pvst_note_on")(handle, 60, 1.0), "pvst_note_on (post-load)").toBe(PVST_OK);
+      expect(abi.fn("webvst_note_on")(handle, 60, 1.0), "webvst_note_on (post-load)").toBe(WEBVST_OK);
       for (let i = 0; i < 8; i += 1) tail = process(128);
       expect(peakOf(tail), "FIFO refilled with audio before reset").toBeGreaterThan(1e-4);
-      expect(abi.fn("pvst_reset")(handle), "pvst_reset").toBe(PVST_OK);
+      expect(abi.fn("webvst_reset")(handle), "webvst_reset").toBe(WEBVST_OK);
       expect(
         process(FIFO_LATENCY_FRAMES).every((s) => s === 0),
-        "32 frames after pvst_reset are the re-primed FIFO (exact silence)",
+        "32 frames after webvst_reset are the re-primed FIFO (exact silence)",
       ).toBe(true);
     } finally {
       abi.free(scratch);
-      abi.fn("pvst_destroy")(handle);
+      abi.fn("webvst_destroy")(handle);
     }
   }, 60_000);
 });

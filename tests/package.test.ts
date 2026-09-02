@@ -209,7 +209,7 @@ describe("dist/SurgeXT.webvst identity", () => {
     expect(manifest.packageId).toBe(config.packageId);
     expect(manifest.version).toBe(config.version);
     expect(manifest.abi).toBe(config.abi);
-    expect(manifest.abi).toBe("prometheos-vst3-wasm-1");
+    expect(manifest.abi).toBe("webvst-vst3-wasm-1");
   });
 
   it("carries exactly one class, whose identity matches the authored class", () => {
@@ -327,7 +327,7 @@ describe("dist/SurgeXT.webvst verification", () => {
 
   it("passes the SDK's own verifier", async () => {
     const inspection = await sdk.verifyWebVst(archive);
-    expect(inspection.abi).toBe("prometheos-vst3-wasm-1");
+    expect(inspection.abi).toBe("webvst-vst3-wasm-1");
     expect(inspection.packageId).toBe(config.packageId);
     expect(inspection.version).toBe(config.version);
     expect(inspection.archiveSha256).toBe(sha256(archive));
