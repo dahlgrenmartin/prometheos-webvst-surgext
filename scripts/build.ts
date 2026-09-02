@@ -46,7 +46,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, relative } from "node:path";
+import { basename, delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
@@ -65,6 +65,14 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const vendorSurgeDir = join(root, "vendor", "surge");
 const vendorSdkDir = join(root, "vendor", "webvst-sdk");
 const patchesDir = join(root, "patches");
+
+/**
+ * Check the upstream tree out with upstream's own bytes on every platform.
+ * Without this, Git on Windows rewrites it to CRLF while Linux leaves it LF,
+ * and the patches below can only apply on one of them. `-c` propagates to the
+ * submodule checkouts too, via GIT_CONFIG_PARAMETERS.
+ */
+const LF_CHECKOUT = ["-c", "core.autocrlf=false", "-c", "core.eol=lf"] as const;
 const outputDir = join(root, "build");
 const outputWasm = join(outputDir, "surgext-webvst.wasm");
 
@@ -287,9 +295,9 @@ function acquireUpstream(): void {
   if (!existsSync(join(upstreamDir, ".git"))) {
     step("cloning the pinned Surge XT checkout into the build tree");
     mkdirSync(workRoot, { recursive: true });
-    run(["git", "clone", "--shared", "--no-checkout", vendorSurgeDir, upstreamDir]);
+    run(["git", ...LF_CHECKOUT, "clone", "--shared", "--no-checkout", vendorSurgeDir, upstreamDir]);
   }
-  run(["git", "checkout", "-f", SURGE_PIN], { cwd: upstreamDir });
+  run(["git", ...LF_CHECKOUT, "checkout", "-f", SURGE_PIN], { cwd: upstreamDir });
   const head = run(["git", "rev-parse", "HEAD"], { cwd: upstreamDir }).out.trim();
   if (head !== SURGE_PIN) {
     throw new Error(`build checkout resolved to ${head}, expected ${SURGE_PIN}`);
@@ -305,7 +313,9 @@ function initialiseSubmodules(): void {
   const missing = REQUIRED_SUBMODULES.filter((path) => !submoduleIsPopulated(path));
   if (missing.length > 0) {
     step(`initialising ${missing.length} Surge submodule(s) (network; this takes a few minutes)`);
-    run(["git", "submodule", "update", "--init", "--depth", "1", ...missing], { cwd: upstreamDir });
+    run(["git", ...LF_CHECKOUT, "submodule", "update", "--init", "--depth", "1", ...missing], {
+      cwd: upstreamDir,
+    });
   }
   for (const [parent, children] of Object.entries(NESTED_SUBMODULES)) {
     const parentDir = join(upstreamDir, ...parent.split("/"));
@@ -315,13 +325,32 @@ function initialiseSubmodules(): void {
     });
     if (absent.length === 0) continue;
     step(`initialising ${absent.length} nested submodule(s) under ${parent}`);
-    run(["git", "submodule", "update", "--init", "--depth", "1", ...absent], { cwd: parentDir });
+    run(["git", ...LF_CHECKOUT, "submodule", "update", "--init", "--depth", "1", ...absent], {
+      cwd: parentDir,
+    });
   }
+}
+
+/**
+ * The patch files are byte-for-byte provenance artifacts whose SHA-256 is
+ * recorded in PROVENANCE.md, and .gitattributes pins them as CRLF so no
+ * checkout can rewrite them. `git apply` compares context lines including the
+ * trailing CR, so feed it an LF copy rather than touching the recorded bytes.
+ */
+function lfPatchCopy(patchPath: string): string {
+  const crlf = String.fromCharCode(13, 10);
+  const lf = String.fromCharCode(10);
+  const text = readFileSync(patchPath).toString("utf8");
+  if (!text.includes(crlf)) return patchPath;
+  const normalized = join(workRoot, `lf-${basename(patchPath)}`);
+  mkdirSync(workRoot, { recursive: true });
+  writeFileSync(normalized, text.split(crlf).join(lf));
+  return normalized;
 }
 
 function applyPatches(): void {
   for (const patch of PATCHES) {
-    const patchPath = join(patchesDir, patch.file);
+    const patchPath = lfPatchCopy(join(patchesDir, patch.file));
     const cwd = patch.cwd ? join(upstreamDir, ...patch.cwd.split("/")) : upstreamDir;
     const alreadyApplied =
       run(["git", "apply", "--reverse", "--check", patchPath], { cwd, allowFailure: true }).code === 0;
