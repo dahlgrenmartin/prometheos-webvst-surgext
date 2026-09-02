@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -94,29 +94,23 @@ const TEXT_EXTENSIONS = new Set([
 const TEXT_BASENAMES = new Set([".gitmodules", ".gitattributes", "CMakeLists.txt"]);
 
 function collectTrackedTextFiles(dir: string, acc: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (
-      entry.name === ".git" ||
-      entry.name === "node_modules" ||
-      entry.name === "vendor" ||
-      // git-ignored: scripts/build.ts writes the .wasm here and `cmake -B
-      // build/native` writes CMake's own path-laden scaffolding here. This scan
-      // is for *tracked* build files; generated output under build/ is not one.
-      entry.name === "build"
-    ) {
-      continue;
-    }
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      collectTrackedTextFiles(full, acc);
-      continue;
-    }
+  // Ask Git what is tracked rather than walking the tree. The walk could only
+  // approximate it with a skip list, and anything untracked that landed in the
+  // working directory -- a sibling worktree, or the Emscripten SDK that CI
+  // installs under the workspace -- was scanned and reported as a leak. Mode
+  // 160000 entries are submodule gitlinks: directories, not readable files.
+  const nul = String.fromCharCode(0);
+  const tab = String.fromCharCode(9);
+  const listing = execFileSync("git", ["ls-files", "-z", "--stage"], { cwd: dir }).toString();
+  for (const entry of listing.split(nul)) {
+    if (!entry || entry.startsWith("160000 ")) continue;
+    const file = entry.slice(entry.indexOf(tab) + 1);
+    const full = join(dir, file);
     if (full === selfPath) continue; // a scanner does not scan itself
-    const dot = entry.name.lastIndexOf(".");
-    const ext = dot >= 0 ? entry.name.slice(dot) : "";
-    if (TEXT_EXTENSIONS.has(ext) || TEXT_BASENAMES.has(entry.name)) {
-      acc.push(full);
-    }
+    const name = file.slice(file.lastIndexOf("/") + 1);
+    const dot = name.lastIndexOf(".");
+    const ext = dot >= 0 ? name.slice(dot) : "";
+    if (TEXT_EXTENSIONS.has(ext) || TEXT_BASENAMES.has(name)) acc.push(full);
   }
   return acc;
 }
