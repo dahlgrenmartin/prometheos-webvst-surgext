@@ -75,6 +75,11 @@ jobs:
       - name: Build the WebVST package
         run: bun scripts/build.ts
 
+      # scripts/build.ts installs and compiles the SDK's tools itself, but this
+      # repository's own dev dependencies (vitest) are not part of that.
+      - name: Install the test dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Run the package test suite
         run: pnpm test
 
