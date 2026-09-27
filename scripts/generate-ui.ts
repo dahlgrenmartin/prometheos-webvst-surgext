@@ -189,6 +189,9 @@ export function parseSkinModel(skinModel: string, surgePatch: string, resources:
       c.bipolar = /bipolar|semi7bp|freq_mod|lfodeform|noise_color/.test(m[1]);
     }
   }
+  // FX parameter sliders are styled by the loaded effect at runtime upstream; they
+  // draw as horizontal light sliders like the rest of the FX panel.
+  for (const c of raw.values()) if (/^fx\.param_\d+$/.test(c.id)) Object.assign(c, { orientation: "horizontal", white: true });
   // LFO envelope and FX parameter sliders take their style from the assignment only.
   for (const c of raw.values()) {
     if (c.mini && c.orientation === "none") c.orientation = "vertical";
@@ -244,6 +247,9 @@ function connectorFor(name: string, scoped: boolean): { connector: string; index
     if (GLOBAL[name]) return { connector: GLOBAL[name], index: -1 };
     if ((m = /^Send FX ([1-4]) Return$/.exec(name))) return { connector: `global.fx${m[1]}_return`, index: Number(m[1]) - 1 };
     if ((m = /^FX (\w\d) FX Type$/.exec(name)) && FX_SLOTS.includes(m[1])) return { connector: "fx.type", index: FX_SLOTS.indexOf(m[1]) };
+    // Generic FX slot parameters (placeholders until an effect loads; see surge_webvst.cpp).
+    if ((m = /^FX (\w\d) Param (\d+)$/.exec(name)) && FX_SLOTS.includes(m[1]) && Number(m[2]) >= 1 && Number(m[2]) <= 12)
+      return { connector: `fx.param_${m[2]}`, index: FX_SLOTS.indexOf(m[1]) };
     return undefined;
   }
   if (SCENE[name]) return { connector: SCENE[name], index: -1 };
@@ -284,18 +290,23 @@ export function bindSurgeParameters(parameters: readonly SurgeParameter[], conne
 export const SKIN_RESOURCES = [102, 105, 112, 113, 114, 117, 118, 119, 120, 122, 123, 125, 126, 132, 134, 137, 140, 143, 144, 145, 146, 148, 149, 151, 152, 153, 154, 157, 160, 161, 162, 164, 166, 167, 168, 169, 171, 172, 173, 174, 175, 176, 177, 178, 181, 183, 184, 186, 187, 189, 190, 191] as const;
 
 /** Upstream path of a skin resource: the dark skin, or the classic SVG it inherits. */
-export function skinResourcePath(surgeDir: string, resource: number, exists: (path: string) => boolean): string {
-  const name = `bmp${String(resource).padStart(5, "0")}.svg`;
+/** Upstream sprite variants: the base image and its optional mouse-hover overlays. */
+export const SKIN_VARIANTS = ["bmp", "hover", "hoverOn"] as const;
+export type SkinVariant = (typeof SKIN_VARIANTS)[number];
+
+export function skinResourcePath(surgeDir: string, resource: number, exists: (path: string) => boolean, variant: SkinVariant = "bmp"): string | undefined {
+  const name = `${variant}${String(resource).padStart(5, "0")}.svg`;
   for (const dir of ["resources/data/skins/dark-mode.surge-skin/SVG", "resources/classic-skin-svgs"]) {
     const path = `${surgeDir}/${dir}/${name}`;
     if (exists(path)) return path;
   }
-  throw new Error(`Upstream skin resource ${name} not found`);
+  if (variant === "bmp") throw new Error(`Upstream skin resource ${name} not found`);
+  return undefined;
 }
 
 export interface SurgeSkin {
   connectors: Map<string, SkinConnector>;
-  assets: Array<{ resource: number; id: string; path: string; width: number; height: number }>;
+  assets: Array<{ resource: number; variant: SkinVariant; id: string; path: string; width: number; height: number }>;
   fxAcronyms: string[];
 }
 
@@ -303,10 +314,10 @@ export interface SurgeSkin {
 export function loadSurgeSkin(surgeDir: string, read: (path: string) => string, exists: (path: string) => boolean): SurgeSkin {
   const common = `${surgeDir}/src/common`;
   const connectors = parseSkinModel(read(`${common}/SkinModel.cpp`), read(`${common}/SurgePatch.cpp`), parseResourceIds(read(`${common}/resource.h`)));
-  const assets = SKIN_RESOURCES.map(resource => {
-    const path = skinResourcePath(surgeDir, resource, exists);
-    return { resource, id: `bmp${String(resource).padStart(5, "0")}`, path, ...svgSize(read(path)) };
-  });
+  const assets = SKIN_RESOURCES.flatMap(resource => SKIN_VARIANTS.flatMap(variant => {
+    const path = skinResourcePath(surgeDir, resource, exists, variant);
+    return path ? [{ resource, variant, id: `${variant}${String(resource).padStart(5, "0")}`, path, ...svgSize(read(path)) }] : [];
+  }));
   return { connectors, assets, fxAcronyms: parseFxAcronyms(read(`${common}/SurgeStorage.h`)) };
 }
 
@@ -327,7 +338,7 @@ export function svgSize(svg: string): { width: number; height: number } {
 export function generateParameterHeader(
   parameters: readonly SurgeParameter[],
   connectors: ReadonlyMap<string, SkinConnector>,
-  assets: ReadonlyArray<{ resource: number; width: number; height: number }>,
+  assets: ReadonlyArray<{ resource: number; variant?: SkinVariant; width: number; height: number }>,
   fxAcronyms: readonly string[],
 ): string {
   // JSON's escaped strings are valid C++ string literals for the probed UTF-8 names.
@@ -352,9 +363,10 @@ struct Connector { const char* id; double x, y, w, h; int kind; int orientation;
 inline const Connector connectors[] = {
 ${connectorRows.join("\n")}
 };
-struct Asset { int resource; double width, height; };
+// variant: 0 base image, 1 hover overlay, 2 hover-on-current-value overlay.
+struct Asset { int resource; int variant; double width, height; };
 inline const Asset assets[] = {
-${assets.map(a => `  {${a.resource},${a.width},${a.height}},`).join("\n")}
+${assets.map(a => `  {${a.resource},${SKIN_VARIANTS.indexOf(a.variant ?? "bmp")},${a.width},${a.height}},`).join("\n")}
 };
 struct Binding { uint32_t id; const char* componentId; const char* name; double initial; uint32_t steps; int connector; int scene; int index; std::vector<std::string> choices; };
 inline const Binding bindings[] = {

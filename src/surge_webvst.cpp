@@ -13,6 +13,7 @@
 #include "SurgeSynthesizer.h"
 
 #include "fixed_block_stream.h"
+#include "surge_messages.h"
 
 namespace
 {
@@ -70,6 +71,8 @@ struct Slot
     // engine block. Per-instance: its buffered audio and cursors must not bleed
     // between instances that reuse this slot.
     FixedBlockStream stream{};
+    // The last webvst-ext-message-1 reply, owned until the next message.
+    std::string reply;
 };
 
 /**
@@ -240,8 +243,30 @@ uint32_t paramStepCount(const Parameter *p)
  * scenes and slots; the shorter display name and the internal name are
  * fallbacks so no parameter is ever unnamed.
  */
+/**
+ * FX slot parameters are `ct_none` placeholders until an effect is loaded into
+ * the slot, and their meaning changes with the effect type. They are still real,
+ * stable IDs the synth accepts values for, so they are exposed as generic
+ * automatable parameters named by slot and position; editors ask the running
+ * synth for the current effect's names (see surge_messages.cpp).
+ */
+const char *const kFxSlotCodes[n_fx_slots] = {"A1", "A2", "B1", "B2", "S1", "S2", "G1", "G2",
+                                              "A3", "A4", "B3", "B4", "S3", "S4", "G3", "G4"};
+bool fxSlotParam(const Parameter *p, int &slot, int &index)
+{
+    auto &patch = metadataSynth()->storage.getPatch();
+    for (slot = 0; slot < n_fx_slots; ++slot)
+        for (index = 0; index < n_fx_params; ++index)
+            if (&patch.fx[slot].p[index] == p)
+                return true;
+    return false;
+}
+
 std::string paramTitle(const Parameter *p)
 {
+    int slot = 0, index = 0;
+    if (p->ctrltype == ct_none && fxSlotParam(p, slot, index))
+        return std::string("FX ") + kFxSlotCodes[slot] + " Param " + std::to_string(index + 1);
     const char *candidates[] = {p->get_full_name(), p->get_name(), p->get_internal_name()};
     for (const char *candidate : candidates)
     {
@@ -342,7 +367,10 @@ uint32_t webvst_class_param_flags(uint32_t class_index, uint32_t parameter_index
     const Parameter *p = classParam(class_index, parameter_index);
     if (p == nullptr)
         return 0u;
-    return p->ctrltype == ct_none ? WEBVST_PARAMETER_READ_ONLY : WEBVST_PARAMETER_AUTOMATABLE;
+    int slot = 0, index = 0;
+    if (p->ctrltype == ct_none && !fxSlotParam(p, slot, index))
+        return WEBVST_PARAMETER_READ_ONLY;
+    return WEBVST_PARAMETER_AUTOMATABLE;
 }
 
 uint32_t webvst_class_param_step_count(uint32_t class_index, uint32_t parameter_index)
@@ -615,6 +643,42 @@ int32_t webvst_state_load(uint32_t handle, const uint8_t *src, uint32_t size)
     // Drop any audio buffered from the pre-preset patch so it cannot leak past
     // the state change.
     slot->stream.reset();
+    return WEBVST_OK;
+}
+
+
+// ---------------------------------------------------------------------------
+// Optional extension webvst-ext-message-1 (see the SDK's docs/abi-v1.md)
+// ---------------------------------------------------------------------------
+
+/**
+ * Editor requests for things only the running synth knows. The reply stays
+ * owned by the instance until the next message; malformed or oversized input
+ * is answered with an error reply, never a trap.
+ */
+uint32_t webvst_ext_message(uint32_t handle, const uint8_t *request, uint32_t size)
+{
+    Slot *slot = resolve(handle);
+    if (slot == nullptr)
+        return 0u;
+    if (request == nullptr || size == 0 || size > 64u * 1024u)
+        slot->reply = "{\"error\":\"request must be 1 byte to 64 KiB\"}";
+    else
+        slot->reply =
+            surge_webvst::handleMessage(*slot->synth, reinterpret_cast<const char *>(request), size);
+    if (slot->reply.size() > 1024u * 1024u)
+        slot->reply = "{\"error\":\"reply exceeds 1 MiB\"}";
+    return static_cast<uint32_t>(slot->reply.size());
+}
+
+int32_t webvst_ext_reply_write(uint32_t handle, uint8_t *dst, uint32_t capacity)
+{
+    Slot *slot = resolve(handle);
+    if (slot == nullptr)
+        return WEBVST_ERROR_HANDLE;
+    if (dst == nullptr || capacity < slot->reply.size())
+        return WEBVST_ERROR_BUFFER_TOO_SMALL;
+    std::memcpy(dst, slot->reply.data(), slot->reply.size());
     return WEBVST_OK;
 }
 

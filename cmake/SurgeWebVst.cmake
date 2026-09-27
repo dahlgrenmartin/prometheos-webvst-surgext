@@ -133,6 +133,7 @@ function(surge_webvst_add_module target)
   add_executable(${target}
     "${SURGE_WEBVST_SOURCE_DIR}/src/surge_webvst.cpp"
     "${SURGE_WEBVST_SOURCE_DIR}/src/fixed_block_stream.cpp"
+    "${SURGE_WEBVST_SOURCE_DIR}/src/surge_messages.cpp"
   )
   target_link_libraries(${target} PRIVATE surge::surge-common)
   target_include_directories(${target} PRIVATE
@@ -165,6 +166,12 @@ function(surge_webvst_add_module target)
   else()
     set(_surge_webvst_filesystem -sFILESYSTEM=0)
   endif()
+  # The SDK's list, plus the optional message extension when the SDK defines it.
+  if(DEFINED WEBVST_EXPORTS_WITH_MESSAGES)
+    set(_surge_webvst_exports "${WEBVST_EXPORTS_WITH_MESSAGES}")
+  else()
+    set(_surge_webvst_exports "${WEBVST_EXPORTS}")
+  endif()
 
   target_link_options(${target} PRIVATE
     -sSTANDALONE_WASM=1
@@ -176,6 +183,6 @@ function(surge_webvst_add_module target)
     -sINITIAL_MEMORY=134217728
     -sSTACK_SIZE=5242880
     ${_surge_webvst_filesystem}
-    "-sEXPORTED_FUNCTIONS=${WEBVST_EXPORTS}"
+    "-sEXPORTED_FUNCTIONS=${_surge_webvst_exports}"
   )
 endfunction()

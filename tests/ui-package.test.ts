@@ -148,3 +148,67 @@ describe.skipIf(!existsSync(archiveUrl))("Surge UI package / host programs", () 
     } finally { exports.wvui_destroy(handle); }
   });
 });
+
+describe.skipIf(!existsSync(archiveUrl))("Surge UI package / hover, double-click and context menu", () => {
+  it("draws upstream hover art, resets on double-click and offers a context menu", async () => {
+    const entries = readArchiveEntries(readFileSync(archiveUrl));
+    const manifest = JSON.parse(new TextDecoder().decode(entries.get("plugin.json")));
+    const module = await WebAssembly.compile(entries.get("ui.wasm")!);
+    let exports: any;
+    let display: any, semantics: any;
+    const requests: Array<[number, number, number]> = [];
+    const instance = await WebAssembly.instantiate(module, { webvst_ui: {
+      submit(kind: number, pointer: number, length: number) {
+        const value = JSON.parse(new TextDecoder().decode(new Uint8Array(exports.memory.buffer, pointer, length)));
+        if (kind === 1) display = value; else if (kind === 2) semantics = value;
+        return 0;
+      },
+      parameter(op: number, id: number, value: number) { requests.push([op, id, value]); return 0; },
+      invalidate() {},
+    } });
+    exports = instance.exports;
+    exports._initialize?.();
+    const handle = exports.wvui_create();
+    const event = (payload: unknown) => {
+      const bytes = new TextEncoder().encode(JSON.stringify(payload));
+      const pointer = exports.wvui_alloc(bytes.length);
+      new Uint8Array(exports.memory.buffer, pointer, bytes.length).set(bytes);
+      exports.wvui_event(handle, pointer, bytes.length);
+      exports.wvui_free(pointer, bytes.length);
+      exports.wvui_frame(handle, 1);
+    };
+    try {
+      exports.wvui_resize(handle, 905, 569, 1);
+      exports.wvui_frame(handle, 0);
+      const volume = semantics.nodes.find((n: any) => n.parameter === "4");
+      const centre = { x: volume.bounds.x + volume.bounds.width / 2, y: volume.bounds.y + volume.bounds.height / 2 };
+      const images = () => new Set(display.commands.filter((c: any) => c.op === "image").map((c: any) => c.asset));
+      expect(images().has("hover00153")).toBe(false);
+      event({ type: "pointermove", ...centre, pointerId: 1 });
+      expect(images().has("hover00153")).toBe(true);
+      for (const id of [...images()]) expect(Object.hasOwn(manifest.ui.assets, id), id).toBe(true);
+      event({ type: "pointerleave" });
+      expect(images().has("hover00153")).toBe(false);
+
+      exports.wvui_parameter(handle, 4, 0.2);
+      event({ type: "dblclick", ...centre, pointerId: 1 });
+      const defaultValue = manifest.classes[0].exposedParameters.find((p: any) => p.parameterId === 4).defaultValue;
+      expect(requests.slice(-3).map(r => r[0])).toEqual([0, 1, 2]);
+      expect(requests.at(-2)![2]).toBeCloseTo(defaultValue, 5);
+
+      event({ type: "pointerdown", ...centre, pointerId: 1, button: 2 });
+      const texts = () => display.commands.filter((c: any) => c.op === "text").map((c: any) => c.text);
+      expect(texts()).toContain("Set to Default Value");
+      expect(texts()).toContain("Edit Value...");
+      // Edit Value: type a percentage and commit.
+      const menu = semantics.nodes.find((n: any) => n.id === "surge-context-menu");
+      expect(menu.choices).toEqual(["Set to Default Value", "Edit Value..."]);
+      event({ type: "keydown", key: "ArrowDown" });
+      event({ type: "keydown", key: "ArrowDown" });
+      event({ type: "keydown", key: "Enter" });
+      for (const key of ["Backspace", "Backspace", "Backspace", "Backspace", "Backspace", "Backspace", "Backspace", "5", "0"]) event({ type: "keydown", key });
+      event({ type: "keydown", key: "Enter" });
+      expect(requests.at(-2)).toEqual([1, 4, 0.5]);
+    } finally { exports.wvui_destroy(handle); }
+  });
+});

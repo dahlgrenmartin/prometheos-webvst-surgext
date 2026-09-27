@@ -524,6 +524,15 @@ inherits) as `ui/skin/`, GPL-3.0-or-later like the rest of Surge XT; and
 SIL Open Font License, whose text ships as `licenses/LATO-OFL.txt`. No upstream
 source is modified. The C++ metadata and `ui.json` are deterministic build outputs.
 
+`src/surge_messages.cpp` (repository-authored, GPL-3.0-or-later) implements the
+SDK's optional `webvst-ext-message-1` exports on the DSP module. Its oscillator
+and LFO rendering port the sampling loops of upstream
+`OscillatorWaveformDisplay::paint` and `LFOAndStepDisplay::paintWaveform`
+onto Surge's own oscillator and LFO classes; modulation edits go through
+`SurgeSynthesizer::setModDepth01`/`clearModulation`. The adapter now marks the
+FX slot placeholder parameters automatable (named `FX <slot> Param <n>`), which
+grows the exposed parameter set from 573 to 765 without changing any ID.
+
 `WEBVST_SDK_DIR` explicitly selects an alternative development SDK for tools and
 headers while preserving the existing SDK gitlink and the default pinned build.
 `--package-only --with-ui` reuses the already-built DSP bytes, compiles a separate

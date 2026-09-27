@@ -138,9 +138,23 @@ mouse wheel over the name), and opens a browser with category lists and a
 typeahead search across all factory presets. The host loads the preset; hosts
 that read parameters back after a load (buzz-remote does) update every control.
 
-Remaining gaps against upstream: hover artwork, double-click reset and context
-menus, modulation routing, wavetable browsing, favorites and patch saving,
-tuning/MPE tools, and dialogs. The
+With the SDK's optional plugin-message channel (`webvst-ext-message-1`, see
+`src/surge_messages.cpp`), the editor asks the running synth for what only it
+knows: live parameter names and value text (so oscillator and FX controls are
+labelled for the current type), typed-value parsing, filter subtype counts, the
+oscillator and LFO displays (the upstream display code paths, rendered by the
+DSP), and modulation routings. Clicking a modulation source selects it (LFOs open
+in the LFO panel); clicking it again arms modulation editing, where slider drags
+set depth through Surge's own `setModDepth01`. Routings live in the synth's
+state and are saved with it. Controls show upstream hover art, double-click
+resets to default, and right-click opens a context menu (value, default, typed
+entry, clearing a routing). The 192 FX slot parameters are exposed as generic
+automatable parameters (`FX A1 Param 1` ...), so the package has 765.
+
+Remaining gaps against upstream: wavetable browsing and import, favorites and
+patch saving, formula (Lua) modulators, MSEG/step-sequencer editing, tuning/MPE
+tools, dialogs, and undo for modulation-routing edits (they live in the synth's
+state, not in host parameters). The
 oscillator and LFO displays are sketches from parameter values, not DSP renders.
 FX per-slot parameters are not exposed by the DSP probe, so the FX panel shows
 the slot grid and type only. Control labels use the probed (default oscillator

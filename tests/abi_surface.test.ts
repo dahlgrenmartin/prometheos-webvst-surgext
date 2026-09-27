@@ -279,8 +279,14 @@ describe("Surge XT WebVST ABI v1 surface", () => {
       "_emscripten_stack_restore",
       "emscripten_stack_get_current",
     ]);
+    // The optional editor channel (SDK docs/abi-v1.md, webvst-ext-message-1)
+    // is the one package-level addition, and both halves must be present.
+    const messageExtension = ["webvst_ext_message", "webvst_ext_reply_write"];
+    expect(messageExtension.filter((name) => !functions.includes(name))).toEqual([]);
     expect(
-      functions.filter((name) => !expected.has(name) && !toolchainRuntimeExports.has(name)),
+      functions.filter(
+        (name) => !expected.has(name) && !toolchainRuntimeExports.has(name) && !messageExtension.includes(name),
+      ),
     ).toEqual([]);
 
     // The engine and its former ABI must not leak out of the package boundary.
