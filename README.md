@@ -83,3 +83,67 @@ The WebVST SDK is currently an unpublished local repository referenced by a
 relative path in `.gitmodules`; that URL must be updated to the public URL once
 the SDK is published. The commit pin makes the dependency immutable regardless
 of URL.
+# WebVST editor development
+
+The optional WebVST editor is built independently of the Surge DSP. With an
+existing `build/surgext-webvst.wasm`, select an SDK checkout containing the new
+UI framework and run:
+
+```powershell
+$env:WEBVST_SDK_DIR = (Resolve-Path ../prometheos-vst3-wasm-sdk).Path
+pnpm run build:ui
+pnpm test
+```
+
+On POSIX shells use `WEBVST_SDK_DIR=../prometheos-vst3-wasm-sdk pnpm run build:ui`.
+This probes the existing DSP, generates `ui.json` and C++ parameter metadata,
+compiles only the small editor module, packs and verifies
+`dist/SurgeXT-UI.webvst`, and writes its SHA-256 sidecar. Emscripten is required.
+The selected SDK's tools must be built after SDK source changes. Without the
+environment override the existing vendored SDK remains the default; its current
+pin predates UI support, so `build:ui` requires the explicit override. Neither
+vendor pin is changed. `bun scripts/build.ts --package-only` also rebuilds the
+original DSP-only package without a DSP compile. `--with-ui` can be added to a
+full build.
+
+`scripts/generate-ui.ts` derives all bindings from probed parameter IDs. The
+complete declarative fallback currently covers all 573 exposed parameters,
+grouped into global/output, effects, both scenes, oscillators, mixer, filters,
+envelopes and voice/scene LFOs. Every control has an authored `surge-param-N`
+component ID and the matching numeric string parameter binding. Scene grouping
+uses the two probed `Octave` anchors in stable ID order; ambiguous anchors fail
+generation instead of inventing a scene. A host displays the tall fallback in
+a scrollable editor container.
+
+`src/ui/SurgeEditor.cpp` ports the upstream JUCE editor to the WebVST UI
+toolkit. It is data-driven the same way upstream is: `scripts/generate-ui.ts`
+reads the pinned upstream `src/common/SkinModel.cpp` (every control's position
+in the 905x569 design), the slider styles in `SurgePatch.cpp` (bipolar,
+semitone, mini), `resource.h` and `fx_type_acronyms`, and binds each probed
+parameter to its upstream connector; generation fails if any parameter has no
+connector. Each widget class mirrors the upstream widget it replaces
+(`ModulatableSlider`, `MultiSwitch`, `Switch`, `NumberField`,
+`MenuForDiscreteParams`, `EffectChooser`, `ModulationSourceButton`,
+`LFOAndStepDisplay`, `PatchSelector`) and draws the dark-mode skin's SVG
+sprites with the same offsets and clip regions. The editor zooms the design to
+the host's size like Surge's zoom. The shown scene follows the canonical
+`Active Scene` parameter; oscillator, LFO (via the modulation buttons) and FX
+slot selection are editor view state that rebinds the controls, so all 573
+parameters are reachable. Custom UI failure leaves the complete declarative
+editor available.
+
+Remaining gaps against upstream: hover artwork, double-click reset and context
+menus, modulation routing, wavetable browsing, the patch browser (the host's
+program API owns the packaged presets), tuning/MPE tools, and dialogs. The
+oscillator and LFO displays are sketches from parameter values, not DSP renders.
+FX per-slot parameters are not exposed by the DSP probe, so the FX panel shows
+the slot grid and type only. Control labels use the probed (default oscillator
+type) names.
+
+The ordinary test suite still checks the pinned baseline package. When
+`SurgeXT-UI.webvst` exists, `tests/ui-package.test.ts` additionally instantiates the
+actual UI WASM and checks complete navigation coverage, parameter gesture and
+canonical-value behavior, teardown, hashes, fallback content, and unchanged
+DSP/preset/license payloads. Those three tests are skipped until `build:ui` has
+produced the optional artifact. `tests/ui.test.ts` checks the skin-model parsing
+and parameter binding against the vendored upstream checkout.

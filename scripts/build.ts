@@ -46,7 +46,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, delimiter, dirname, join, relative } from "node:path";
+import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
@@ -60,10 +60,14 @@ import {
   type ManifestPrograms,
   type PackResult,
 } from "./pack-presets";
+import { generateSurgeUi, generateParameterHeader, loadSurgeSkin } from "./generate-ui";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const vendorSurgeDir = join(root, "vendor", "surge");
 const vendorSdkDir = join(root, "vendor", "webvst-sdk");
+const sdkDir = process.env.WEBVST_SDK_DIR ? resolve(process.env.WEBVST_SDK_DIR) : vendorSdkDir;
+const withUi = process.argv.includes("--with-ui");
+const packageOnly = process.argv.includes("--package-only");
 const patchesDir = join(root, "patches");
 
 /**
@@ -107,12 +111,12 @@ const licensesDir = join(packageDir, "licenses");
 const stagingDir = join(workRoot, "staging");
 
 const distDir = join(root, "dist");
-const archivePath = join(distDir, "SurgeXT.webvst");
-const archiveName = "SurgeXT.webvst";
+const archiveName = withUi ? "SurgeXT-UI.webvst" : "SurgeXT.webvst";
+const archivePath = join(distDir, archiveName);
 const checksumPath = `${archivePath}.sha256`;
 
 /** The SDK's authoring tools ship as TypeScript; `dist/` is compiled here. */
-const sdkToolsDir = join(vendorSdkDir, "tools");
+const sdkToolsDir = join(sdkDir, "tools");
 const sdkToolsDist = join(sdkToolsDir, "dist");
 
 /** Every license the archive must carry, staged verbatim from `package/licenses`. */
@@ -396,7 +400,7 @@ function configureAndBuild(): void {
     // synthetic prefix costs nothing. tests/abi_surface.test.ts enforces this.
     "-DCMAKE_INSTALL_PREFIX=/webvst",
     `-DSURGE_WEBVST_UPSTREAM_DIR=${cmakePath(upstreamDir)}`,
-    `-DSURGE_WEBVST_SDK_DIR=${cmakePath(vendorSdkDir)}`,
+    `-DSURGE_WEBVST_SDK_DIR=${cmakePath(sdkDir)}`,
   ];
   console.log(`[surgext-webvst] ${configure.join(" ")}`);
   const configured = run(configure, { env, allowFailure: true });
@@ -466,6 +470,11 @@ interface WebVstManifest {
   module: { path: string; sha256: string };
   classes: ManifestClass[];
   artifacts?: ManifestArtifact[];
+  ui?: {
+    version: 1;
+    classes: Array<{ classUid: string; document: { path: string; sha256: string }; custom: { path: string; sha256: string; abi: "webvst-ui-1"; requiredCapabilities: string[]; optionalCapabilities: string[] } }>;
+    assets: Record<string, { path: string; sha256: string; type: "image" | "font" }>;
+  };
 }
 
 interface SdkManifestTools {
@@ -636,6 +645,7 @@ function assertStagingContents(config: AuthorConfig, packed: PackResult): void {
   const expected = [
     "plugin.json",
     config.modulePath,
+    ...(withUi ? [...UI_STAGED] : []),
     ...LICENSE_FILES.map((file) => `licenses/${file}`),
     ...packed.categories.map((category) => category.artifactPath),
   ].sort();
@@ -655,6 +665,69 @@ function assertStagingContents(config: AuthorConfig, packed: PackResult): void {
   if (scripts.length > 0) {
     throw new Error(`the staging tree contains executable JavaScript: ${scripts.join(", ")}`);
   }
+}
+
+/** Upstream files the editor ships verbatim: the Lato faces its labels use. */
+const UI_FONTS = [
+  { id: "lato", source: "resources/fonts/Lato-Regular.ttf", path: "ui/fonts/Lato-Regular.ttf" },
+  { id: "lato-bold", source: "resources/fonts/Lato-Bold.ttf", path: "ui/fonts/Lato-Bold.ttf" },
+] as const;
+/** Every staged path the UI adds; filled by stageUi, checked by assertStagingContents. */
+const UI_STAGED = new Set<string>();
+
+/** Reads a file from the pinned Surge commit object, never the (possibly dirty) working tree. */
+function pinnedUpstream(path: string): Buffer {
+  const result = Bun.spawnSync(["git", "show", `${SURGE_PIN}:${path}`], { cwd: vendorSurgeDir, stdout: "pipe", stderr: "pipe" });
+  if (result.exitCode !== 0) throw new Error(`pinned Surge has no ${path}: ${result.stderr.toString()}`);
+  return Buffer.from(result.stdout);
+}
+function pinnedUpstreamExists(path: string): boolean {
+  return Bun.spawnSync(["git", "cat-file", "-e", `${SURGE_PIN}:${path}`], { cwd: vendorSurgeDir }).exitCode === 0;
+}
+
+/** Separate UI compilation never recompiles or changes the existing DSP module. */
+function stageUi(manifest: WebVstManifest): void {
+  if (!existsSync(join(sdkDir, "include", "webvst", "ui.h"))) {
+    throw new Error("The selected SDK has no UI toolkit. Set WEBVST_SDK_DIR to a UI-enabled SDK checkout; the vendor pin remains unchanged.");
+  }
+  const uiBuild = join(workRoot, "ui");
+  mkdirSync(uiBuild, { recursive: true });
+  const parameters = manifest.classes[0]!.exposedParameters;
+  // Layout, slider styles and artwork come from the pinned upstream editor sources.
+  const skin = loadSurgeSkin("", (path) => pinnedUpstream(path.replace(/^\//, "")).toString("utf8"),
+    (path) => pinnedUpstreamExists(path.replace(/^\//, "")));
+  writeFileSync(join(uiBuild, "surge_parameters.h"), generateParameterHeader(parameters, skin.connectors, skin.assets, skin.fxAcronyms));
+  writeFileSync(join(stagingDir, "ui.json"), `${JSON.stringify(generateSurgeUi(parameters))}\n`);
+  UI_STAGED.clear();
+  for (const path of ["ui.json", "ui.wasm", "licenses/LATO-OFL.txt"]) UI_STAGED.add(path);
+  const hash = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
+  const assets: NonNullable<WebVstManifest["ui"]>["assets"] = {};
+  const stage = (id: string, source: string, path: string, type: "image" | "font") => {
+    const target = join(stagingDir, ...path.split("/"));
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, pinnedUpstream(source));
+    assets[id] = { path, sha256: hash(target), type };
+    UI_STAGED.add(path);
+  };
+  for (const asset of skin.assets) stage(asset.id, asset.path.replace(/^\//, ""), `ui/skin/${asset.id}.svg`, "image");
+  for (const font of UI_FONTS) stage(font.id, font.source, font.path, "font");
+  writeFileSync(join(stagingDir, "licenses", "LATO-OFL.txt"), pinnedUpstream("resources/fonts/OFL.txt"));
+  const emscripten = emscriptenDir();
+  const env = buildEnvironment(emscripten);
+  const compiler = join(emscripten, "em++.py");
+  const uiWasm = join(stagingDir, "ui.wasm");
+  step("compiling the independent Surge UI module");
+  run([env.EMSDK_PYTHON ?? "python", compiler,
+    join(sdkDir, "src", "ui", "ui.cpp"), join(sdkDir, "src", "ui", "abi.cpp"), join(root, "src", "ui", "SurgeEditor.cpp"),
+    `-I${join(sdkDir, "include")}`, `-I${uiBuild}`, "-std=c++17", "-O2", "-fno-exceptions", "-fno-rtti", "-DNDEBUG",
+    "-sSTANDALONE_WASM=1", "--no-entry", "-sFILESYSTEM=0", "-sMALLOC=emmalloc", "-sALLOW_MEMORY_GROWTH=0", "-sASSERTIONS=0",
+    "-sEXPORTED_FUNCTIONS=['_wvui_version','_wvui_alloc','_wvui_free','_wvui_create','_wvui_destroy','_wvui_resize','_wvui_event','_wvui_parameter','_wvui_frame']",
+    "-o", uiWasm,
+  ], { env });
+  manifest.ui = { version: 1, assets, classes: [{ classUid: manifest.classes[0]!.classUid,
+    document: { path: "ui.json", sha256: hash(join(stagingDir, "ui.json")) },
+    custom: { path: "ui.wasm", sha256: hash(uiWasm), abi: "webvst-ui-1", requiredCapabilities: ["webvst-ui-core/1"], optionalCapabilities: [] },
+  }] };
 }
 
 /**
@@ -677,6 +750,8 @@ async function packageArchive(): Promise<void> {
   rmSync(stagingDir, { recursive: true, force: true });
   mkdirSync(join(stagingDir, "licenses"), { recursive: true });
   writePresetArtifacts(packed, join(stagingDir, "presets"));
+  if (withUi) stageUi(manifest);
+  sdk.validateManifest(manifest);
   // Exactly as `webvst manifest` writes it: one canonical line, one newline.
   writeFileSync(join(stagingDir, "plugin.json"), `${JSON.stringify(manifest)}\n`);
   cpSync(outputWasm, join(stagingDir, config.modulePath));
@@ -731,8 +806,14 @@ function cleanOutputs(): void {
 }
 
 async function main(): Promise<void> {
+  if (packageOnly && (clean || sourceOnly)) throw new Error("--package-only cannot be combined with --clean or --source-only");
   if (clean) cleanOutputs();
   assertPinnedSubmodule();
+  if (packageOnly) {
+    if (!existsSync(outputWasm)) throw new Error("--package-only requires build/surgext-webvst.wasm from an earlier DSP build");
+    await packageArchive();
+    return;
+  }
   acquireUpstream();
   initialiseSubmodules();
   applyPatches();

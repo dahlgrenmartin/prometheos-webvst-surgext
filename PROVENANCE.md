@@ -508,3 +508,35 @@ the container framing itself is a function of its contents.
 archive** and plays it: notes, decay, parameters, factory presets recalled from
 the packed slices at their manifest offsets, state round-trip, and two isolated
 instances.
+# Optional WebVST UI source boundary
+
+The UI framework migration adds repository-authored `src/ui/SurgeEditor.cpp`
+and `scripts/generate-ui.ts` under this repository's GPL-3.0-or-later license.
+The editor is a port of the upstream JUCE editor: its layout and slider styles
+are generated at package time from the pinned upstream `src/common/SkinModel.cpp`,
+`SurgePatch.cpp`, `resource.h` and `SurgeStorage.h`, and its parameter
+registry from the DSP probe. The package ships upstream files verbatim, read
+from the pinned commit object (`git show <pin>:<path>`), never the working
+tree: the dark-mode skin SVGs `resources/data/skins/dark-mode.surge-skin/SVG/bmpNNNNN.svg`
+(falling back to `resources/classic-skin-svgs/` for the three the dark skin
+inherits) as `ui/skin/`, GPL-3.0-or-later like the rest of Surge XT; and
+`resources/fonts/Lato-Regular.ttf` and `Lato-Bold.ttf` as `ui/fonts/`, under the
+SIL Open Font License, whose text ships as `licenses/LATO-OFL.txt`. No upstream
+source is modified. The C++ metadata and `ui.json` are deterministic build outputs.
+
+`WEBVST_SDK_DIR` explicitly selects an alternative development SDK for tools and
+headers while preserving the existing SDK gitlink and the default pinned build.
+`--package-only --with-ui` reuses the already-built DSP bytes, compiles a separate
+`ui.wasm`, and produces `dist/SurgeXT-UI.webvst`. Its additional staged entries
+are exactly `ui.json`, `ui.wasm`, the declared `ui/skin/` and `ui/fonts/` assets,
+and `licenses/LATO-OFL.txt`; every UI file is declared with its SHA-256 in the
+optional manifest UI extension. Presets, DSP module and license payloads remain
+unchanged. The baseline `dist/SurgeXT.webvst` artifact retains its original entry
+set and provenance tests. The existing `WEBVST-SDK-MIT.txt` notice covers the
+SDK runtime linked into the optional editor module.
+
+This development override is not a new immutable release pin. Releasing an
+editor-enabled package requires pinning the chosen UI-capable SDK revision and
+recording it here through the normal provenance update process. See README's
+editor development section for the explicit remaining upstream GUI migration
+surface.
