@@ -100,3 +100,51 @@ describe.skipIf(!existsSync(archiveUrl))("Surge UI package / compiled editor", (
     expect(requests.slice(-2).map(r => r[0])).toEqual([0, 2]);
   });
 });
+
+describe.skipIf(!existsSync(archiveUrl))("Surge UI package / host programs", () => {
+  it("shows the host's current program, steps with the jogs and searches every patch", async () => {
+    const entries = readArchiveEntries(readFileSync(archiveUrl));
+    const module = await WebAssembly.compile(entries.get("ui.wasm")!);
+    let exports: any;
+    const display: any[] = [], requests: any[] = [];
+    const instance = await WebAssembly.instantiate(module, { webvst_ui: {
+      submit(kind: number, pointer: number, length: number) {
+        const value = JSON.parse(new TextDecoder().decode(new Uint8Array(exports.memory.buffer, pointer, length)));
+        if (kind === 3) requests.push(value); else if (kind === 1) display[0] = value;
+        return 0;
+      },
+      parameter() { return 0; },
+      invalidate() {},
+    } });
+    exports = instance.exports;
+    exports._initialize?.();
+    const handle = exports.wvui_create();
+    const event = (payload: unknown) => {
+      const bytes = new TextEncoder().encode(JSON.stringify(payload));
+      const pointer = exports.wvui_alloc(bytes.length);
+      new Uint8Array(exports.memory.buffer, pointer, bytes.length).set(bytes);
+      exports.wvui_event(handle, pointer, bytes.length);
+      exports.wvui_free(pointer, bytes.length);
+      exports.wvui_frame(handle, 1);
+    };
+    try {
+      exports.wvui_resize(handle, 905, 569, 1);
+      event({ type: "programs", categories: [{ name: "Basses", programs: ["Attacky", "Round"] }, { name: "Pads", programs: ["Bell Pad", "Glass"] }] });
+      event({ type: "program", category: 1, program: 0 });
+      const texts = () => display[0].commands.filter((c: any) => c.op === "text").map((c: any) => c.text);
+      expect(texts()).toContain("Bell Pad");
+      expect(texts()).toContain("Category: Pads");
+      // Patch jog (upstream controls.patch.prevnext at 246,42): right half is "next".
+      event({ type: "pointerdown", x: 246 + 24, y: 48, pointerId: 1 });
+      expect(requests.at(-1)).toEqual({ type: "program", category: 1, program: 1 });
+      // Search: open from the magnifier, type, pick the first match across categories.
+      event({ type: "pointerup", x: 246 + 24, y: 48, pointerId: 1 });
+      event({ type: "pointerdown", x: 157 + 8, y: 20, pointerId: 1 });
+      for (const key of ["r", "o", "u"]) event({ type: "keydown", key });
+      expect(texts()).toContain("Round");
+      expect(texts()).not.toContain("Glass");
+      event({ type: "keydown", key: "Enter" });
+      expect(requests.at(-1)).toEqual({ type: "program", category: 0, program: 1 });
+    } finally { exports.wvui_destroy(handle); }
+  });
+});

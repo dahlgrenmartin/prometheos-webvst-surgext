@@ -132,9 +132,15 @@ slot selection are editor view state that rebinds the controls, so all 573
 parameters are reachable. Custom UI failure leaves the complete declarative
 editor available.
 
+The patch browser uses the host program service (`host.programs/1`): it shows
+the current preset and category, steps with the category/patch jogs (or the
+mouse wheel over the name), and opens a browser with category lists and a
+typeahead search across all factory presets. The host loads the preset; hosts
+that read parameters back after a load (buzz-remote does) update every control.
+
 Remaining gaps against upstream: hover artwork, double-click reset and context
-menus, modulation routing, wavetable browsing, the patch browser (the host's
-program API owns the packaged presets), tuning/MPE tools, and dialogs. The
+menus, modulation routing, wavetable browsing, favorites and patch saving,
+tuning/MPE tools, and dialogs. The
 oscillator and LFO displays are sketches from parameter values, not DSP renders.
 FX per-slot parameters are not exposed by the DSP probe, so the FX panel shows
 the slot grid and type only. Control labels use the probed (default oscillator

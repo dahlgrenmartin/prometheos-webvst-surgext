@@ -659,17 +659,238 @@ public:
 };
 
 // PatchSelector: the patch name area. Patch browsing stays with the host's program API.
+// Case-insensitive ASCII substring match, as Surge's patch typeahead.
+bool contains(const std::string& text, const std::string& query) {
+    if (query.empty()) return true;
+    auto lower = [](std::string s) { for (auto& c : s) c = char(std::tolower(static_cast<unsigned char>(c))); return s; };
+    return lower(text).find(lower(query)) != std::string::npos;
+}
+
+// PatchSelector: current program name and category from the host's program service.
+// Clicking the name opens the patch browser; the magnifier opens it for searching.
 class PatchSelector final : public Component {
 public:
-    explicit PatchSelector(const Connector& c) : Component("surge-patch-browser") { setBounds({c.x, c.y, c.w, c.h}); }
+    PatchSelector(const Connector& c, Programs& programs) : Component("surge-patch-browser", "Patch browser"), programs(programs) {
+        setBounds({c.x, c.y, c.w, c.h});
+        setFocusable(true);
+    }
+    std::function<void(bool search)> onOpen;
     void paint(Graphics& g) override {
         const auto b = bounds();
-        sprite(g, 187, {4, 4, 12, 12}, 0, 0);
-        sprite(g, 186, {b.width - 16, 4, 12, 12}, 0, 0);
-        g.text("Surge XT", b.width / 2, 4 + ascent(13), em(13), kLightGray, kFont, Align::Center);
-        g.text("Category: WebVST", 4, b.height - 3, em(9), kLightGray, kFont);
-        g.text("Programs: host menu", b.width - 4, b.height - 3, em(9), kLightGray, kFont, Align::Right);
+        sprite(g, 187, {4, 4, 13, 13}, 0, 0);
+        sprite(g, 186, {b.width - 17, 4, 13, 13}, 0, 0);
+        const bool known = programs.available() && !programs.name().empty();
+        g.text(known ? programs.name() : "Surge XT", b.width / 2, 4 + ascent(13), em(13), hasFocus() ? "#D4D4D4" : kLightGray, kFont, Align::Center);
+        if (known) {
+            const auto& categories = programs.categories();
+            g.text("Category: " + categories[size_t(programs.category())].name, 4, b.height - 3, em(9), kLightGray, kFont);
+            g.text(std::to_string(programs.program() + 1) + " / " + std::to_string(categories[size_t(programs.category())].programs.size()),
+                   b.width - 4, b.height - 3, em(9), kLightGray, kFont, Align::Right);
+        }
     }
+    void onEvent(Event& e) override {
+        if (e.phase != EventPhase::Target || !programs.available()) return;
+        if (e.type == EventType::PointerDown) {
+            double x = 0, y = 0;
+            toLocal(e.x, e.y, x, y);
+            if (onOpen) onOpen(x < 22);
+        } else if (e.type == EventType::KeyDown && (e.key == "Enter" || e.key == " ")) {
+            if (onOpen) onOpen(false);
+            e.stopPropagation();
+        } else if (e.type == EventType::Wheel) {
+            programs.step(e.deltaY > 0 ? 1 : -1);
+            e.stopPropagation();
+        }
+    }
+    std::string semantic() const override {
+        return programs.available() ? semanticBase(*this, "button", "Patch: " + programs.name()) + "}" : "";
+    }
+private:
+    Programs& programs;
+};
+
+// The category and patch prev/next jogs (upstream IDB_PREVNEXT_JOG).
+class ProgramJog final : public Component {
+public:
+    ProgramJog(const Connector& c, Programs& programs, bool category)
+        : Component(std::string("surge-") + c.id, category ? "category" : "patch"), connector(c), programs(programs), category(category) {
+        setBounds({c.x, c.y, c.w, c.h});
+    }
+    void paint(Graphics& g) override {
+        if (!programs.available()) g.setOpacity(.35);
+        sprite(g, connector.background, {0, 0, bounds().width, bounds().height}, 0, 0);
+        g.setOpacity(1);
+    }
+    void move(int delta) {
+        if (!programs.available()) return;
+        if (!category) { programs.step(delta); return; }
+        const int n = int(programs.categories().size());
+        programs.select(((std::max(0, programs.category()) + delta) % n + n) % n, 0);
+    }
+    void onEvent(Event& e) override {
+        if (e.phase != EventPhase::Target || e.type != EventType::PointerDown) return;
+        double x = 0, y = 0;
+        toLocal(e.x, e.y, x, y);
+        move(x < bounds().width / 2 ? -1 : 1);
+    }
+    std::string semantic() const override {
+        return programs.available() ? semanticBase(*this, "button", std::string("Next ") + label()) + "}" : "";
+    }
+private:
+    const Connector& connector;
+    Programs& programs;
+    const bool category;
+};
+
+// The patch browser: categories, their patches, and a typeahead search across all
+// programs (upstream's patch menu plus PatchSelector's type-ahead).
+class PatchBrowser final : public Component {
+public:
+    explicit PatchBrowser(Programs& programs) : Component("surge-patch-browser-panel", "Patch browser"), programs(programs) {
+        setBounds({0, 0, kDesignWidth, kDesignHeight});
+        setVisible(false);
+        setFocusable(true);
+    }
+    bool isOpen() const { return visible(); }
+    void open(bool search) {
+        query.clear();
+        category = std::max(0, programs.category());
+        searching = search;
+        rebuild();
+        highlight = 0;
+        for (size_t i = 0; i < results.size(); ++i)
+            if (results[i].first == programs.category() && results[i].second == programs.program()) highlight = int(i);
+        scrollTo(highlight);
+        setVisible(true);
+        grabFocus();
+        repaint();
+    }
+    void close() { setVisible(false); }
+    void paint(Graphics& g) override {
+        g.save(); g.setOpacity(.35); g.rect({0, 0, kDesignWidth, kDesignHeight}, "#000000"); g.restore();
+        g.rect(panel, "#202020");
+        g.strokeRect({panel.x + .5, panel.y + .5, panel.width - 1, panel.height - 1}, "#0F0F0F", 1);
+        // Search field.
+        const Rect field{panel.x + 6, panel.y + 6, panel.width - 12, 18};
+        g.rect(field, "#151515");
+        g.strokeRect({field.x + .5, field.y + .5, field.width - 1, field.height - 1}, searching ? kOrange : "#4F4F4F", 1);
+        sprite(g, 187, {field.x + 3, field.y + 2.5, 13, 13}, 0, 0);
+        const double baseline = field.y + 9 + ascent(10) / 2 - .5;
+        if (query.empty()) g.text(searching ? "Type to search all patches" : "Search", field.x + 20, baseline, em(10), "#808080", kFont);
+        else g.text(query, field.x + 20, baseline, em(10), kLightGray, kFont);
+        if (searching) {
+            const double caret = field.x + 20 + query.size() * 5.2;
+            g.line(caret, field.y + 4, caret, field.y + field.height - 4, kOrange, 1);
+        }
+        // Categories.
+        const auto& categories = programs.categories();
+        const double top = panel.y + 30, rows = std::floor((panel.height - 36) / kRow);
+        for (size_t i = 0; i < categories.size() && i < rows; ++i) {
+            const Rect r{panel.x + 6, top + i * kRow, 118, kRow};
+            const bool current = int(i) == category && query.empty();
+            if (current) g.rect(r, "#000000");
+            g.text(categories[i].name, r.x + 4, r.y + kRow - 3.5, em(10), current ? kOrange : query.empty() ? kLightGray : "#808080", kFont);
+        }
+        g.line(panel.x + 128, top, panel.x + 128, panel.y + panel.height - 6, "#4F4F4F", 1);
+        // Patches (of the category, or search results).
+        for (int row = 0; row < int(rows) && scroll + row < int(results.size()); ++row) {
+            const int i = scroll + row;
+            const auto [c, p] = results[size_t(i)];
+            const Rect r{panel.x + 132, top + row * kRow, panel.width - 138, kRow};
+            if (i == highlight) g.rect(r, "#000000");
+            const bool current = c == programs.category() && p == programs.program();
+            g.text(categories[size_t(c)].programs[size_t(p)], r.x + 4, r.y + kRow - 3.5, em(10), current ? kOrange : kLightGray, kFont);
+            if (!query.empty()) g.text(categories[size_t(c)].name, r.x + r.width - 4, r.y + kRow - 3.5, em(9), "#808080", kFont, Align::Right);
+        }
+        if (results.empty()) g.text("No patches match", panel.x + 136, top + kRow - 3.5, em(10), "#808080", kFont);
+    }
+    void onEvent(Event& e) override {
+        if (e.phase != EventPhase::Target || !isOpen()) return;
+        double x = 0, y = 0;
+        toLocal(e.x, e.y, x, y);
+        const double top = panel.y + 30;
+        if (e.type == EventType::PointerDown) {
+            if (!panel.contains(x, y)) { close(); return; }
+            if (y < top) { searching = true; repaint(); return; }
+            const int row = int((y - top) / kRow);
+            if (x < panel.x + 128) {
+                if (row >= 0 && size_t(row) < programs.categories().size()) { query.clear(); category = row; rebuild(); highlight = scroll = 0; searching = false; }
+            } else if (scroll + row < int(results.size())) {
+                choose(scroll + row);
+                return;
+            }
+            repaint();
+        } else if (e.type == EventType::Wheel) {
+            scroll = std::clamp(scroll + (e.deltaY > 0 ? 3 : -3), 0, std::max(0, int(results.size()) - visibleRows()));
+            repaint();
+            e.stopPropagation();
+        } else if (e.type == EventType::KeyDown) {
+            key(e);
+            e.stopPropagation();
+        } else if (e.type == EventType::Blur) {
+            close();
+        }
+    }
+    std::string semantic() const override {
+        if (!isOpen()) return "";
+        std::string s = semanticBase(*this, "combobox", "Patch search: " + query) + ",\"value\":" +
+                        number(results.size() > 1 ? double(highlight) / (results.size() - 1) : 0) + ",\"min\":0,\"max\":1,\"choices\":[";
+        for (size_t i = 0; i < results.size() && i < 512; ++i)
+            s += (i ? "," : "") + quote(programs.categories()[size_t(results[i].first)].programs[size_t(results[i].second)]);
+        return s + "]}";
+    }
+private:
+    void key(const Event& e) {
+        const bool printable = e.key.size() == 1 ? e.key[0] >= 32 && e.key[0] < 127 : !e.key.empty() && static_cast<unsigned char>(e.key[0]) >= 0x80;
+        if (e.key == "Escape") { if (query.empty()) close(); else { query.clear(); rebuild(); } }
+        else if (e.key == "Enter") { if (highlight >= 0 && highlight < int(results.size())) choose(highlight); return; }
+        else if (e.key == "ArrowDown") highlight = std::min(int(results.size()) - 1, highlight + 1);
+        else if (e.key == "ArrowUp") highlight = std::max(0, highlight - 1);
+        else if ((e.key == "ArrowLeft" || e.key == "ArrowRight") && query.empty()) {
+            const int n = int(programs.categories().size());
+            category = ((category + (e.key == "ArrowLeft" ? -1 : 1)) % n + n) % n;
+            rebuild(); highlight = 0;
+        } else if (e.key == "Backspace") {
+            // Drop one UTF-8 code point.
+            while (!query.empty() && (static_cast<unsigned char>(query.back()) & 0xC0) == 0x80) query.pop_back();
+            if (!query.empty()) query.pop_back();
+            rebuild();
+        } else if (printable && !e.ctrlKey && !e.metaKey && query.size() < 64) {
+            query += e.key; searching = true; rebuild(); highlight = 0;
+        }
+        scrollTo(highlight);
+        repaint();
+    }
+    void rebuild() {
+        results.clear();
+        const auto& categories = programs.categories();
+        for (size_t c = 0; c < categories.size(); ++c) {
+            if (query.empty() && int(c) != category) continue;
+            for (size_t p = 0; p < categories[c].programs.size(); ++p)
+                if (query.empty() || contains(categories[c].programs[p], query) || contains(categories[c].name, query))
+                    results.push_back({int(c), int(p)});
+        }
+        highlight = std::min(highlight, std::max(0, int(results.size()) - 1));
+        scroll = std::min(scroll, std::max(0, int(results.size()) - visibleRows()));
+    }
+    int visibleRows() const { return int(std::floor((panel.height - 36) / kRow)); }
+    void scrollTo(int i) {
+        if (i < scroll) scroll = i;
+        else if (i >= scroll + visibleRows()) scroll = i - visibleRows() + 1;
+        scroll = std::max(0, scroll);
+    }
+    void choose(int i) {
+        const auto [c, p] = results[size_t(i)];
+        close();
+        programs.select(c, p);
+    }
+    static constexpr double kRow = 14;
+    Programs& programs;
+    const Rect panel{157, 40, 390, 420};
+    std::string query;
+    std::vector<std::pair<int, int>> results;
+    int category = 0, highlight = 0, scroll = 0;
+    bool searching = false;
 };
 
 // VuMeter: empty meter frame (level telemetry is not part of the UI ABI yet).
@@ -774,12 +995,20 @@ public:
         };
         // Decorations first so bound controls paint (and hit test) above them.
         for (const char* id : {"controls.status.mpe", "controls.status.tune", "controls.status.zoom", "controls.patch.save", "controls.action.undo",
-                               "controls.action.redo", "controls.category.prevnext", "controls.patch.prevnext", "controls.surge_menu",
+                               "controls.action.redo", "controls.surge_menu",
                                "lfo.presets", "lfo.mseg_editor", "filter.filter_preview", "filter.waveshaper_preview",
                                "filter.waveshaper_prevnext", "fx.preset.prevnext"})
             decorations.push_back(std::make_unique<Decoration>(connector(id)));
         for (auto& d : decorations) addAndMakeVisible(*d);
-        patch = std::make_unique<PatchSelector>(connector("controls.patch_browser"));
+        auto& programs = parameters.programs();
+        patch = std::make_unique<PatchSelector>(connector("controls.patch_browser"), programs);
+        categoryJog = std::make_unique<ProgramJog>(connector("controls.category.prevnext"), programs, true);
+        patchJog = std::make_unique<ProgramJog>(connector("controls.patch.prevnext"), programs, false);
+        browser = std::make_unique<PatchBrowser>(programs);
+        patch->onOpen = [this](bool search) { menu.close(); browser->open(search); };
+        addAndMakeVisible(*categoryJog);
+        addAndMakeVisible(*patchJog);
+        programs.listen([this] { repaint(); });
         vu = std::make_unique<VuMeter>(connector("controls.vu_meter"));
         oscDisplay = std::make_unique<OscDisplay>(connector("osc.display"));
         lfoTitle = std::make_unique<LfoTitle>(connector("lfo.title"));
@@ -822,7 +1051,11 @@ public:
             addAndMakeVisible(*control);
             controls.push_back(std::move(control));
         }
+        addAndMakeVisible(*browser);
         addAndMakeVisible(menu);
+        // Overlays are children from the start (topmost for hit testing) but begin closed.
+        browser->close();
+        menu.close();
 
         oscDisplay->type = [this] { return int(std::lround(current("osc.type") * 11)); };
         oscDisplay->sibling = [this](const char* id) { return current(id); };
@@ -881,6 +1114,8 @@ private:
     Parameters& parameters;
     std::vector<std::unique_ptr<Decoration>> decorations;
     std::unique_ptr<PatchSelector> patch;
+    std::unique_ptr<ProgramJog> categoryJog, patchJog;
+    std::unique_ptr<PatchBrowser> browser;
     std::unique_ptr<VuMeter> vu;
     std::unique_ptr<OscDisplay> oscDisplay;
     std::unique_ptr<LfoTitle> lfoTitle;
