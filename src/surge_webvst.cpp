@@ -96,7 +96,18 @@ struct SurgeBlockProcessor final : BlockProcessor
             synth->input[0][i] = input[i * 2];
             synth->input[1][i] = input[i * 2 + 1];
         }
+        // DSP ABI v1 carries no host transport, so run Surge's own clock the
+        // way upstream's standalone wrapper does (SurgeSynthProcessor.cpp):
+        // a running 4/4 transport at the patch tempo. Freerun LFOs derive
+        // their phase from songpos; frozen at 0 they would restart each note.
+        auto &time = synth->time_data;
+        time.tempo = synth->storage.unstreamedTempo > 0 ? synth->storage.unstreamedTempo : 120.0;
+        time.timeSigNumerator = 4;
+        time.timeSigDenominator = 4;
+        time.isPlaying = true;
+        synth->resetStateFromTimeData();
         synth->process();
+        time.ppqPos += static_cast<double>(kBlock) * time.tempo / (60.0 * synth->storage.samplerate);
         for (int i = 0; i < kBlock; ++i)
         {
             output[i * 2] = synth->output[0][i];

@@ -142,6 +142,42 @@ describe.skipIf(!existsSync(archiveUrl))("Surge DSP messages (webvst-ext-message
     expect(dsp.message({ type: "modulation" }).routings).toEqual([]);
   });
 
+  it("runs a clock so Freerun LFOs keep their phase across notes, unlike Keytrigger", () => {
+    // LFO 1 → Volume makes the LFO phase audible as each note's loudness curve.
+    const noteEnvelopes = (triggerMode: number) => {
+      const dsp = instantiate(module);
+      const { exports: x, handle } = dsp;
+      x.webvst_param_set(handle, id("LFO 1 Trigger Mode"), triggerMode);
+      dsp.message({ type: "setModulation", target: id("Volume"), source: 17, sourceScene: 0, index: 0, depth: -1 });
+      const out = x.malloc(128 * 2 * 4);
+      const run = (blocks: number) => {
+        const rms: number[] = [];
+        for (let b = 0; b < blocks; b++) {
+          x.webvst_process(handle, 0, out, 128);
+          const s = new Float32Array(x.memory.buffer, out, 256);
+          rms.push(Math.sqrt(s.reduce((a: number, v: number) => a + v * v, 0) / 256));
+        }
+        return rms;
+      };
+      const note = (skipBlocks: number) => {
+        run(skipBlocks);
+        x.webvst_note_on(handle, 60, 0.8);
+        const env = run(75); // 200 ms
+        x.webvst_note_off(handle, 60);
+        return env;
+      };
+      const first = note(10);
+      const second = note(150); // a start that is not a whole LFO period later
+      x.free(out);
+      return first.reduce((a, v, i) => a + Math.abs(v - second[i]!), 0) / first.reduce((a, v) => a + v, 0);
+    };
+    const keytrigger = noteEnvelopes(0.5);
+    const freerun = noteEnvelopes(0);
+    // Keytrigger restarts the LFO, so both notes share one loudness curve (up to
+    // ordinary note-to-note variation); Freerun continues it, so they differ.
+    expect(freerun).toBeGreaterThan(10 * keytrigger);
+  });
+
   it("answers malformed requests with errors instead of trapping", () => {
     const dsp = instantiate(module);
     expect(dsp.raw(new TextEncoder().encode("{not json")).error).toBeTruthy();
