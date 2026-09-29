@@ -6,7 +6,7 @@
 
 **Architecture:** A new sibling repository, `prometheos-webclap-surgext`, builds only the JUCE-free Surge engine plus one direct `SurgeClapPlugin` implementation and one CLAP preset-discovery provider. The WCLAP bundle contains `module.wasm` plus untransformed Surge data files; arbitrary host block sizes are handled inside `SurgeClapPlugin::process()` against Surge's fixed 32-frame DSP block.
 
-**Tech Stack:** C++20, CMake 3.28+, wasi-sdk 33, official CLAP headers, pinned Surge XT, CTest, Node.js for WASM ABI inspection, and pinned `WebCLAP/wclap-bridge` as a test-only generic host.
+**Tech Stack:** C++20, CMake 3.28+, wasi-sdk 34, official CLAP headers, pinned Surge XT, CTest, Node.js for WASM ABI inspection, and pinned `WebCLAP/wclap-bridge` as a test-only generic host.
 
 **Spec:** `docs/superpowers/specs/2026-09-29-surgext-webclap-headless-design.md`
 
@@ -15,7 +15,7 @@
 - Target repository: `prometheos-webclap-surgext`.
 - Surge pin: `2644c613fb729cf2ce924c39dc75cf6a61ee9324`.
 - CLAP headers pin: `a47f6badb49d948fd009998f28309cdab78979c9`.
-- Canonical toolchain release: `wasi-sdk-33`; the Linux x86_64 release artifact SHA-256 must be recorded in `toolchains/wasi-sdk.lock` and verified before use.
+- Canonical toolchain release: `wasi-sdk-34`; the Linux x86_64 release artifact SHA-256 must be recorded in `toolchains/wasi-sdk.lock` and verified before use.
 - WCLAP output architecture: `wasm32`, reactor style, no `main()`.
 - Product module exports `clap_entry`, exactly one growable function table, exported growable memory, and `malloc()`.
 - Product memory envelope: 128 MiB initial memory, 2 GiB maximum memory, 5 MiB stack.
@@ -57,10 +57,10 @@
 - Create: `PROVENANCE.md`
 
 **Interfaces:**
-- Produces: exported `extern "C" const clap_plugin_entry clap_entry`
+- Produces: exported `extern "C" const clap_plugin_entry_t clap_entry`
 - Produces: plugin factory descriptor with ID `org.surge-synth-team.surge-xt`
 - Produces: CMake target `SurgeXTWclap` whose output is `dist/SurgeXT.wclap/module.wasm`
-- Produces: `toolchains/wasi-sdk.lock` containing `version=wasi-sdk-33`, release URL, and verified SHA-256
+- Produces: `toolchains/wasi-sdk.lock` containing `version=wasi-sdk-34`, release URL, and verified SHA-256
 
 - [ ] **Step 1: Create the new repository and copy the approved planning artifacts**
 
@@ -80,9 +80,9 @@ git submodule status
 
 Expected: both paths show exactly those SHAs.
 
-- [ ] **Step 3: Pin wasi-sdk 33 by checksum**
+- [ ] **Step 3: Pin wasi-sdk 34 by checksum**
 
-Download the canonical Linux x86_64 `wasi-sdk-33` release artifact once, compute `sha256sum`, and record the exact URL and digest in `toolchains/wasi-sdk.lock`. `cmake/wasi-sdk.cmake` must refuse a toolchain whose version/path does not match the lock.
+Download the canonical Linux x86_64 `wasi-sdk-34` release artifact once, compute `sha256sum`, and record the exact URL and digest in `toolchains/wasi-sdk.lock`. `cmake/wasi-sdk.cmake` must refuse a toolchain whose version/path does not match the lock.
 
 Run:
 
@@ -231,7 +231,7 @@ Link the product only to `surge::surge-common` and dependencies transitively req
 For each existing WebVST patch area—CMake/MTS/wasm link assumptions, stacktrace/execinfo fallback, and shared-library-path/`dladdr` fallback—attempt the wasi-sdk build without the patch first.
 
 For each area:
-- if the build succeeds and runtime code path is not referenced, do not add a patch; record “not required under wasi-sdk 33” in `PROVENANCE.md`;
+- if the build succeeds and runtime code path is not referenced, do not add a patch; record “not required under wasi-sdk 34” in `PROVENANCE.md`;
 - if it fails, add the smallest WASI-specific patch under `patches/surge/`, hash it, and record the reason.
 
 No Emscripten-specific preprocessor branch may be copied as-is.
@@ -679,7 +679,7 @@ Expected: byte-identical equality for all unpacked bundle files.
 Record:
 - Surge URL + exact SHA;
 - CLAP URL + exact SHA;
-- wasi-sdk 33 asset URL + SHA-256;
+- wasi-sdk 34 asset URL + SHA-256;
 - every retained Surge patch + SHA-256 + rationale;
 - explicit note for each old WebVST patch class that was dropped as unnecessary;
 - `resources/data` provenance;
