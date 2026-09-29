@@ -40,6 +40,8 @@ Relevant upstream reference points:
   https://github.com/surge-synthesizer/surge/blob/2644c613fb729cf2ce924c39dc75cf6a61ee9324/src/surge-xt/SurgeSynthProcessor.cpp
 - Pinned Surge CLAP preset discovery implementation:  
   https://github.com/surge-synthesizer/surge/blob/2644c613fb729cf2ce924c39dc75cf6a61ee9324/src/surge-xt/SurgeCLAPPresetDiscovery.cpp
+- WebCLAP WCLAP module and bundle contract:  
+  https://github.com/WebCLAP/.github/blob/main/profile/README.md
 
 ## 3. Scope
 
@@ -120,7 +122,24 @@ The Surge configuration should retain the existing JUCE-free strategy: disable t
 
 The exact Surge commit is pinned. The exact CLAP header commit is pinned. The exact wasi-sdk release and checksum are pinned.
 
-## 5. Surge portability policy
+## 5. WCLAP module contract
+
+The output is a `wasm32` WCLAP reactor module. It has no `main()` entry point.
+
+The generated module must satisfy the WebCLAP contract directly:
+
+- export `clap_entry`;
+- import memory or export memory according to WCLAP host requirements;
+- export exactly one growable function table;
+- export `malloc()` or a compatible allocator entry such as `cabi_realloc()`;
+- expose `module.wasm` at the top level of the `.wclap` bundle;
+- use WASI for filesystem/system services rather than an Emscripten runtime.
+
+The build and ABI tests must inspect these WebAssembly-level properties, not merely prove that the module links.
+
+The module should avoid relying on symlinks inside the bundle because WebCLAP hosts are not required to support them.
+
+## 6. Surge portability policy
 
 The three existing WebVST Surge patches are **not** copied blindly.
 
@@ -135,7 +154,7 @@ No patch may exist solely to emulate Emscripten behavior.
 
 The source and binary should not embed developer-specific absolute paths. Reproducible path remapping or equivalent compile-time controls remain part of the build requirements.
 
-## 6. WCLAP bundle and filesystem
+## 7. WCLAP bundle and filesystem
 
 The package should follow normal WebCLAP/WCLAP bundle conventions and keep Surge's resource layout as close to upstream as practical.
 
@@ -151,19 +170,21 @@ SurgeXT.wclap/
         ...
 ```
 
-The final exact resource root may differ if WebCLAP packaging conventions require it, but the rule is fixed: **Surge reads ordinary bundled files through WASI filesystem access**.
+The rule is fixed: **Surge reads ordinary bundled files through WASI filesystem access**.
 
 There is no generated resource embedding layer.
 
-`SurgeStorage` receives one deterministic data root derived from the bundle filesystem. It must not search developer paths, native host paths, or environment-specific fallback directories.
+The bundle root is derived from the plugin path supplied to `clap_entry.init()`. `SurgeStorage` receives a deterministic resource path relative to that bundle root. It must not search developer paths, native host paths, or environment-specific fallback directories.
 
 If Surge requires a writable config or user directory, the plugin maps that to a known writable WASI sandbox location. That writable location is separate from the immutable bundled factory content.
 
-## 7. CLAP entry and plugin factory
+## 8. CLAP entry and plugin factory
 
 The module exports standard `clap_entry`.
 
 It exposes one CLAP plugin factory containing one instrument descriptor for Surge XT.
+
+The CLAP plugin ID is `org.surge-synth-team.surge-xt`, matching upstream Surge CLAP and the preset-discovery plugin association. This does not imply compatibility with upstream JUCE/CLAP automation IDs; v1 deliberately uses direct Surge engine parameter IDs.
 
 The runtime object graph is deliberately short:
 
@@ -185,7 +206,7 @@ CLAP preset-discovery factory
 
 This separation is intentional because preset discovery can occur without an instantiated audio plugin.
 
-## 8. SurgeClapPlugin responsibilities
+## 9. SurgeClapPlugin responsibilities
 
 `SurgeClapPlugin` is the only audio/plugin boundary.
 
@@ -209,9 +230,9 @@ It implements only the CLAP extensions needed by v1:
 
 Preset discovery is exposed through the CLAP preset-discovery factory, not the instantiated plugin extension table.
 
-## 9. Lifecycle
+## 10. Lifecycle
 
-### 9.1 Construction and init
+### 10.1 Construction and init
 
 Plugin creation allocates `SurgeClapPlugin`, but expensive engine setup happens in `init()`.
 
@@ -226,33 +247,32 @@ Plugin creation allocates `SurgeClapPlugin`, but expensive engine setup happens 
 
 If required resources are absent or Surge construction fails, `init()` returns false. A partially initialized plugin is never exposed as usable.
 
-### 9.2 Activate
+### 10.2 Activate
 
 `activate(sample_rate, min_frames, max_frames)` configures Surge for the host sample rate and resets block staging and transport state.
 
 The plugin must accept host process blocks of any size permitted by CLAP, regardless of Surge's internal 32-frame block size.
 
-### 9.3 Start/stop processing
+### 10.3 Start/stop processing
 
 Realtime processing begins only after successful activation. Starting processing performs no filesystem work and allocates no persistent structures.
 
 Stopping processing leaves the plugin in a state where non-realtime state operations remain valid.
 
-### 9.4 Reset
+### 10.4 Reset
 
 Reset clears note/audio processing state and the partial 32-frame staging position without destroying the Surge instance or parameter metadata.
 
-## 10. Audio processing and the 32-frame Surge boundary
+## 11. Audio processing and the 32-frame Surge boundary
 
 Surge processes fixed 32-frame internal blocks. CLAP does not require hosts to use multiples of 32.
 
 The adaptation is implemented **inside** `SurgeClapPlugin::process()`, not in a separate helper class.
 
-The plugin maintains the smallest persistent state required to span host callbacks:
+Because v1 has no audio input, the plugin maintains only the smallest persistent state required to span host callbacks:
 
 - current position within the 32-frame Surge block;
-- any staged audio input required by Surge;
-- any generated output that has not yet been consumed by the current CLAP process call;
+- generated Surge output that has not yet been consumed by the current CLAP process call;
 - transport position corresponding to the internal block boundary.
 
 The processing algorithm must preserve the semantics proven by upstream Surge's own processor code while remaining independent of JUCE.
@@ -261,7 +281,7 @@ Host process sizes such as 1, 7, 31, 32, 33, 64, 127, and 128 frames must all pr
 
 No standalone fixed-block adapter abstraction is introduced.
 
-## 11. Event handling
+## 12. Event handling
 
 The plugin reads input events in timestamp order.
 
@@ -284,7 +304,7 @@ The v1 implementation does **not** handle:
 
 Those remain future additive capabilities.
 
-## 12. Parameters
+## 13. Parameters
 
 The parameter table is generated directly from Surge's engine parameter list.
 
@@ -319,7 +339,7 @@ No parameter wrapper objects are required.
 
 Metadata such as stepped/boolean flags, ranges, names, and display text should be derived from Surge's own parameter metadata and formatting logic rather than duplicated tables.
 
-## 13. Transport
+## 14. Transport
 
 When `clap_process.transport` is present, standard CLAP transport fields are mapped into `surge->time_data`, including tempo and musical position where available.
 
@@ -331,7 +351,7 @@ The internal clock advances by the exact number of rendered frames at the curren
 
 Transport mapping is local plugin implementation logic, not a custom host extension.
 
-## 14. State
+## 15. State
 
 `clap.state` uses Surge's native plugin-state bytes directly.
 
@@ -356,7 +376,7 @@ State loading reads the complete incoming stream before handing bytes to Surge. 
 
 The implementation should use Surge's normal state-application sequence, including whatever audio-thread-safe handoff is required by the pinned engine revision.
 
-## 15. Preset discovery
+## 16. Preset discovery
 
 v1 exposes standard CLAP preset discovery.
 
@@ -378,7 +398,7 @@ User preset locations and writing are not required for v1.
 
 Preset loading uses Surge's normal patch-loading mechanism. Preset discovery does not create a second preset/state format.
 
-## 16. Error handling and realtime rules
+## 17. Error handling and realtime rules
 
 Initialization failures are explicit and early.
 
@@ -397,13 +417,17 @@ Malformed state returns failure rather than silently accepting partial state.
 
 A missing mandatory factory-resource root causes plugin initialization failure with a deterministic diagnostic path for tests.
 
-## 17. Testing strategy
+## 18. Testing strategy
 
-### 17.1 Build and ABI tests
+### 18.1 Build and ABI tests
 
 Assert that the produced module:
 
+- is a `wasm32` reactor with no `main()`;
 - exports `clap_entry`;
+- satisfies the WCLAP memory contract;
+- exports exactly one growable function table;
+- exports `malloc()` or a compatible allocator entry;
 - exposes one plugin descriptor;
 - exposes the expected CLAP extensions;
 - contains no WebVST exports;
@@ -411,7 +435,7 @@ Assert that the produced module:
 - has no Emscripten runtime dependency;
 - contains no developer-specific absolute paths.
 
-### 17.2 Lifecycle tests
+### 18.2 Lifecycle tests
 
 Cover:
 
@@ -423,7 +447,7 @@ Cover:
 - reset;
 - repeated instance creation.
 
-### 17.3 Audio block-size tests
+### 18.3 Audio block-size tests
 
 Render equivalent material with host blocks of:
 
@@ -438,7 +462,7 @@ Render equivalent material with host blocks of:
 
 Verify continuous output and deterministic equivalence within the timing behavior actually supported by the Surge engine.
 
-### 17.4 Event tests
+### 18.4 Event tests
 
 Place note and parameter events:
 
@@ -450,7 +474,7 @@ Place note and parameter events:
 
 Document and verify the exact event-timing rule.
 
-### 17.5 Parameter tests
+### 18.5 Parameter tests
 
 Verify:
 
@@ -460,7 +484,7 @@ Verify:
 - normalized values round-trip;
 - text formatting/parsing matches Surge behavior where supported.
 
-### 17.6 Transport tests
+### 18.6 Transport tests
 
 Cover:
 
@@ -470,7 +494,7 @@ Cover:
 - no host transport;
 - freerun clock continuity across CLAP callbacks.
 
-### 17.7 State tests
+### 18.7 State tests
 
 Perform:
 
@@ -480,7 +504,7 @@ save -> mutate synth -> load -> verify restoration
 
 Also test truncated and malformed streams.
 
-### 17.8 Preset-discovery tests
+### 18.8 Preset-discovery tests
 
 Use known bundled factory patches to verify:
 
@@ -491,7 +515,7 @@ Use known bundled factory patches to verify:
 - plugin association;
 - malformed file isolation.
 
-### 17.9 Generic WebCLAP smoke test
+### 18.9 Generic WebCLAP smoke test
 
 A generic WebCLAP host must be able to:
 
@@ -508,7 +532,7 @@ A generic WebCLAP host must be able to:
 
 No Surge-specific host code is allowed in this test.
 
-## 18. Determinism and provenance
+## 19. Determinism and provenance
 
 `PROVENANCE.md` records:
 
@@ -523,24 +547,25 @@ No Surge-specific host code is allowed in this test.
 
 Two clean builds from the same pinned inputs should produce equivalent package contents. Where byte-for-byte archive reproducibility is not guaranteed by the container format, the reproducibility contract must specify which unpacked files and hashes are deterministic.
 
-## 19. Acceptance criteria
+## 20. Acceptance criteria
 
 The v1 design is accepted when all of the following are true:
 
-1. A clean wasi-sdk build produces a valid WCLAP bundle.
-2. The module uses official CLAP headers directly.
-3. The runtime build contains no JUCE, WebVST SDK, Emscripten runtime, or CLAP helper framework.
-4. `SurgeClapPlugin` owns `SurgeSynthesizer` directly.
-5. Generic WebCLAP hosting requires no Surge-specific glue.
-6. Stereo audio renders correctly for arbitrary legal host process sizes.
-7. Notes, MIDI, engine parameters, transport, state, and preset discovery work.
-8. Factory resources are ordinary WASI-visible bundle files.
-9. State is Surge's native serialized state without an added wrapper schema.
-10. Parameter IDs are direct Surge engine IDs.
-11. Provenance and dependency pins are complete.
-12. The test suite covers the plugin boundary, block adaptation, event timing, state, transport, presets, and a generic host smoke test.
+1. A clean wasi-sdk build produces a valid `wasm32` WCLAP bundle with `module.wasm` at its root.
+2. The module satisfies WebCLAP's `clap_entry`, memory, function-table, and allocator requirements.
+3. The module uses official CLAP headers directly.
+4. The runtime build contains no JUCE, WebVST SDK, Emscripten runtime, or CLAP helper framework.
+5. `SurgeClapPlugin` owns `SurgeSynthesizer` directly.
+6. Generic WebCLAP hosting requires no Surge-specific glue.
+7. Stereo audio renders correctly for arbitrary legal host process sizes.
+8. Notes, MIDI, engine parameters, transport, state, and preset discovery work.
+9. Factory resources are ordinary WASI-visible bundle files.
+10. State is Surge's native serialized state without an added wrapper schema.
+11. Parameter IDs are direct Surge engine IDs.
+12. Provenance and dependency pins are complete.
+13. The test suite covers the plugin boundary, block adaptation, event timing, state, transport, presets, and a generic host smoke test.
 
-## 20. Design rationale
+## 21. Design rationale
 
 The central rule is to distinguish **plugin implementation** from **adapter glue**.
 
