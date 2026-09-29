@@ -275,6 +275,7 @@ git commit -m "build: port Surge engine to wasi-sdk"
 **Interfaces:**
 - Consumes: `surge::surge-common`, staged resource layout
 - Produces:
+  - `const std::string &surgeWclapResourceRoot() noexcept` from the path captured by `clap_entry.init()`; Task 6 reuses this exact path source
   - `bool SurgeClapPlugin::init() noexcept`
   - `bool SurgeClapPlugin::activate(double sampleRate, uint32_t minFrames, uint32_t maxFrames) noexcept`
   - `void SurgeClapPlugin::deactivate() noexcept`
@@ -293,17 +294,21 @@ git commit -m "build: port Surge engine to wasi-sdk"
 ```cpp
 CHECK(factory->get_plugin_count(factory) == 1);
 CHECK(std::string(descriptor->id) == "org.surge-synth-team.surge-xt");
+CHECK(factory->create_plugin(factory, &host, "wrong.plugin.id") == nullptr);
 CHECK(plugin->init(plugin));
 CHECK(audioPorts->count(plugin, false) == 1);
 CHECK(notePorts->count(plugin, true) == 1);
 CHECK(plugin->activate(plugin, 48000.0, 1, 128));
 CHECK(plugin->start_processing(plugin));
+plugin->reset(plugin);
 plugin->stop_processing(plugin);
 plugin->deactivate(plugin);
 plugin->destroy(plugin);
 ```
 
 Add a second test that calls entry/plugin initialization with a bundle path whose `resources/configuration.xml` is missing and asserts `plugin->init(plugin) == false`.
+
+Add a third test that creates two plugin instances simultaneously, initializes/activates/resets/destroys them independently, and asserts the first instance's parameter state is unchanged when the second is reset.
 
 Run:
 
@@ -315,7 +320,7 @@ Expected: FAIL because `create_plugin` still returns `nullptr`.
 
 - [ ] **Step 2: Implement bundle-root resolution inside `SurgeClapPlugin.cpp`**
 
-Store the path received by `clap_entry.init(plugin_path)`. Resolve:
+Store the path received by `clap_entry.init(plugin_path)` in module-lifetime state and expose its resolved resource path through `surgeWclapResourceRoot()`. Clear that state in `clap_entry.deinit()`. Resolve:
 - `.../SurgeXT.wclap/module.wasm` -> bundle root `.../SurgeXT.wclap`;
 - a directory path -> that directory.
 
@@ -336,6 +341,8 @@ For native tests, `ClapTestHost` passes the staged bundle path explicitly.
 Create `SurgeSynthesizer` only after validating mandatory resources. Catch construction failures at the callback boundary and return false; do not let exceptions escape the CLAP ABI.
 
 `activate()` calls `setSamplerate(sampleRate)` and clears block/transport state.
+
+`startProcessing()` clears lingering notes, sets `synth_->audio_processing_active = true`, and performs no allocation or filesystem access. `stopProcessing()` sets it false.
 
 `reset()` calls `allNotesOff()` and resets the 32-frame cursor.
 
@@ -595,12 +602,13 @@ git commit -m "feat: add direct Surge audio processing"
 - [ ] **Step 1: Write failing preset-discovery tests**
 
 Using the staged resource tree, assert the provider:
+- obtains its data path from `surgeWclapResourceRoot()`;
 - declares file type `fxp`;
 - declares factory and third-party locations when those directories exist;
 - returns name/creator/category metadata for one known factory `.fxp`;
 - associates the preset with `org.surge-synth-team.surge-xt`.
 
-Create a temporary malformed `.fxp`, call `get_metadata`, assert it reports an error/false, then immediately query a valid factory preset and assert that succeeds.
+Create temporary malformed `.fxp` cases with a wrong FXP magic/tag and with a truncated XML payload. For each, call `get_metadata`, assert it reports an error/false, then immediately query a valid factory preset and assert that succeeds.
 
 Run:
 
@@ -614,13 +622,15 @@ Expected: FAIL because the preset-discovery factory is absent.
 
 Use pinned upstream `SurgeCLAPPresetDiscovery.cpp` as the semantic source.
 
+Create preset-discovery storage with `SurgeStorage::SurgeStorageConfig::fromDataPath(surgeWclapResourceRoot())`, set `createUserDirectory = false`, and do not consult native install locations.
+
 Reuse:
 - `SurgeStorage`;
 - `PatchFileHeaderStructs.h`;
 - endian helpers;
 - TinyXML already used by Surge.
 
-Do not include `SurgeSynthProcessor.h`, JUCE headers, OSC code, or editor code.
+Do not include `SurgeSynthProcessor.h`, JUCE headers, OSC code, or editor code. Validate magic/tag fields with non-mutating comparisons; do not reproduce the pinned provider's accidental mutating `memcpy` tag check.
 
 User preset locations are omitted in v1.
 
@@ -750,7 +760,7 @@ git commit -m "test: lock WCLAP surface and reproducibility"
 - [ ] **Step 1: Write the failing generic-host smoke test**
 
 `tests/webclap_smoke_test.cpp` must:
-1. call `wclap_global_init(5000)`;
+1. call `wclap_global_init(5000)` and `wclap_set_strings("", "", "")` so the C-API bridge does not decorate IDs/names;
 2. create temporary writable preset/cache/var directories and open `dist/SurgeXT.wclap` with `wclap_open_with_dirs`, passing the temp var directory so the module receives writable `/var`;
 3. assert `wclap_get_error` reports no error;
 4. obtain `CLAP_PLUGIN_FACTORY_ID` using `wclap_get_factory`;
