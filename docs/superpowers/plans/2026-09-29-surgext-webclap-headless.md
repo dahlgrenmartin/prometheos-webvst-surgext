@@ -48,6 +48,7 @@
 - Create: `vendor/clap` submodule at `a47f6badb49d948fd009998f28309cdab78979c9`
 - Create: `vendor/surge` submodule at `2644c613fb729cf2ce924c39dc75cf6a61ee9324`
 - Create: `toolchains/wasi-sdk.lock`
+- Create: `cmake/VerifyWasiSdk.cmake`
 - Create: `cmake/wasi-sdk.cmake`
 - Create: `src/SurgeClapPlugin.h`
 - Create: `src/SurgeClapPlugin.cpp`
@@ -87,10 +88,10 @@ Download the canonical Linux x86_64 `wasi-sdk-34` release artifact once, compute
 Run:
 
 ```bash
-sha256sum -c toolchains/wasi-sdk.lock
+cmake -DLOCK="$PWD/toolchains/wasi-sdk.lock" -DARCHIVE="$WASI_SDK_ARCHIVE" -P cmake/VerifyWasiSdk.cmake
 ```
 
-Expected: `OK`.
+Expected: exits 0 and prints `Verified wasi-sdk-33`.
 
 - [ ] **Step 4: Write the failing WASM contract test**
 
@@ -316,7 +317,15 @@ Store the path received by `clap_entry.init(plugin_path)`. Resolve:
 - `.../SurgeXT.wclap/module.wasm` -> bundle root `.../SurgeXT.wclap`;
 - a directory path -> that directory.
 
-Set Surge's data path to `<bundle-root>/resources`. Do not search `HOME`, developer paths, or native install locations for factory data.
+Construct Surge with the pinned engine's supplied-data-path constructor:
+
+```cpp
+std::make_unique<SurgeSynthesizer>(nullptr, (<bundle-root> / "resources").string())
+```
+
+Do not search `HOME`, developer paths, or native install locations for factory data.
+
+Before construction under WASI, provide deterministic writable defaults without overriding host-provided values: `HOME=/var` and `PATH=/usr/bin`. The generic-host smoke test must mount a writable `/var`; native tests point `HOME` at a temporary writable directory.
 
 For native tests, `ClapTestHost` passes the staged bundle path explicitly.
 
@@ -330,9 +339,9 @@ Create `SurgeSynthesizer` only after validating mandatory resources. Catch const
 
 - [ ] **Step 4: Implement the two standard port extensions**
 
-Audio: exactly one output, stereo, main port, no input port.
+Audio: exactly one output, stereo, main port, no input port. Do not set `CLAP_AUDIO_PORT_SUPPORTS_64BITS`; v1 accepts `data32` processing only.
 
-Notes: exactly one input. Advertise CLAP note dialect plus MIDI input; no note output.
+Notes: exactly one input. Set `supported_dialects = CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI`, `preferred_dialect = CLAP_NOTE_DIALECT_CLAP`, and expose no note output.
 
 - [ ] **Step 5: Run lifecycle tests**
 
@@ -418,9 +427,15 @@ The state test must:
 3. load state A;
 4. save state B and assert A == B.
 
-The malformed-state test must:
+The malformed-state test must cover at least:
+- fewer than 4 bytes;
+- a truncated `patch_header`;
+- a `sub3` header whose `xmlsize` runs past the buffer;
+- a valid state truncated inside appended wavetable/arbitrary-block storage.
+
+For each case:
 1. save current valid state;
-2. call state load with a truncated copy;
+2. call state load with the malformed bytes;
 3. assert load returns false;
 4. save state again and assert it still equals the original valid state.
 
@@ -429,6 +444,10 @@ The malformed-state test must:
 `save` calls `populateDawExtraState()`, then `saveRaw()`, then writes all bytes through `clap_ostream::write` until complete or failure.
 
 `load` reads the entire CLAP stream into a temporary vector before calling Surge's queued state-load path. Do not apply bytes incrementally.
+
+Because pinned `SurgePatch::load_patch()` returns `void` and can return early after `loadRaw()` has already reset the active patch, add an internal `bool validateSurgeStateBlob(std::span<const std::byte>) noexcept` in `SurgeClapPlugin.cpp`. It must perform the same top-level bounds checks needed to prove the raw patch is structurally complete before enqueueing: minimum size, `sub3` header size, XML extent, appended wavetable extents, and claimed trailing arbitrary-block extent. For XML-only legacy states, parse the XML into a temporary TinyXML document and require a root patch element before enqueueing.
+
+Only after validation succeeds call `enqueuePatchForLoad()`. When audio is unavailable, immediately run Surge's normal `processAudioThreadOpsWhenAudioEngineUnavailable()` path; when processing is active, leave the validated state queued for the audio thread.
 
 Use the pinned processor's non-realtime state-application sequence as the behavioral reference, but do not instantiate `SurgeSynthProcessor`.
 
@@ -516,6 +535,8 @@ Supported core events:
 - `CLAP_EVENT_MIDI`
 - `CLAP_EVENT_PARAM_VALUE`
 
+Reject/ignore events whose `space_id` is not `CLAP_CORE_EVENT_SPACE_ID` or whose `header.time >= process->frames_count`. A zero-frame process call is valid: return without changing `blockPos_` or transport.
+
 Ignore unsupported core/non-core events safely.
 
 Do not implement param modulation or note expression in v1.
@@ -533,7 +554,7 @@ Assert `surge->time_data` is refreshed from host values at the next internal 32-
 - [ ] **Step 5: Implement transport mapping/free-run**
 
 At each internal block boundary:
-- if `process->transport` is present, copy valid tempo, PPQ/song position, playing state, and time signature into `synth_->time_data`, then call `resetStateFromTimeData()`;
+- if `process->transport` is present, convert CLAP fixed-point beat/song positions with the official `CLAP_BEATTIME_FACTOR`/`CLAP_SECTIME_FACTOR` constants, copy only fields whose validity flags are set, map playing state and time signature, then call `resetStateFromTimeData()`;
 - otherwise set a running 4/4 clock, choose `storage.unstreamedTempo > 0 ? storage.unstreamedTempo : 120.0`, call `resetStateFromTimeData()`, and advance PPQ by `32 * tempo / (60 * sampleRate)` after processing.
 
 - [ ] **Step 6: Run audio/event/transport tests**
@@ -728,7 +749,7 @@ git commit -m "test: lock WCLAP surface and reproducibility"
 
 `tests/webclap_smoke_test.cpp` must:
 1. call `wclap_global_init(5000)`;
-2. open `dist/SurgeXT.wclap` with `wclap_open_with_dirs`;
+2. create temporary writable preset/cache/var directories and open `dist/SurgeXT.wclap` with `wclap_open_with_dirs`, passing the temp var directory so the module receives writable `/var`;
 3. assert `wclap_get_error` reports no error;
 4. obtain `CLAP_PLUGIN_FACTORY_ID` using `wclap_get_factory`;
 5. assert one descriptor with ID `org.surge-synth-team.surge-xt`;
