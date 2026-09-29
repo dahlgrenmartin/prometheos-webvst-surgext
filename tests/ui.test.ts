@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import {
-  bindSurgeParameters, generateParameterHeader, generateSurgeUi, groupSurgeParameters, loadSurgeSkin, type UiNode,
+  bindSurgeParameters, generateParameterHeader, generateSurgeUi, groupSurgeParameters, loadSurgeSkin, splitScene, type UiNode,
 } from "../scripts/generate-ui";
 import { readArchiveEntries } from "./webvst_archive";
 
@@ -25,10 +25,17 @@ describe("Surge UI metadata", () => {
 
   it("distinguishes both scenes and preserves meaningful synth sections", () => {
     const groups = groupSurgeParameters(parameters);
-    expect(groups.find(g => g.id === "scene-a-osc-1")?.parameters.map(p => p.name)).toContain("Osc 1 Pitch");
-    expect(groups.find(g => g.id === "scene-b-osc-1")?.parameters.map(p => p.name)).toContain("Osc 1 Pitch");
+    expect(groups.find(g => g.id === "scene-a-osc-1")?.parameters.map(p => p.name)).toContain("A Osc 1 Pitch");
+    expect(groups.find(g => g.id === "scene-b-osc-1")?.parameters.map(p => p.name)).toContain("B Osc 1 Pitch");
     for (const id of ["global", "effects", "scene-a-filter", "scene-a-amp-eg", "scene-a-filter-eg", "scene-a-lfo-1", "scene-b-scene-lfo-6"])
       expect(groups.some(g => g.id === id), id).toBe(true);
+  });
+
+  it("reads the scene from the adapter's A/B title prefix", () => {
+    expect(splitScene("A Filter 1 Cutoff")).toEqual({ scene: 0, base: "Filter 1 Cutoff" });
+    expect(splitScene("B Scene LFO 3 Rate")).toEqual({ scene: 1, base: "Scene LFO 3 Rate" });
+    expect(splitScene("Character")).toEqual({ scene: -1, base: "Character" });
+    expect(splitScene("FX A1 Param 1")).toEqual({ scene: -1, base: "FX A1 Param 1" });
   });
 
   it("rejects duplicate or unsafe IDs rather than silently dropping a parameter", () => {
@@ -55,8 +62,8 @@ describe("Surge skin model (upstream SkinModel.cpp / SurgePatch.cpp)", () => {
     const bindings = bindSurgeParameters(parameters, skin.connectors);
     expect(bindings).toHaveLength(parameters.length);
     const find = (name: string, scene: number) => bindings.find(b => b.parameter.name === name && b.scene === scene)!;
-    expect(find("Osc 2 Shape", 1)).toMatchObject({ connector: "osc.param_1", index: 1 });
-    expect(find("Scene LFO 3 Rate", 0)).toMatchObject({ connector: "lfo.rate", index: 8 });
+    expect(find("B Osc 2 Shape", 1)).toMatchObject({ connector: "osc.param_1", index: 1 });
+    expect(find("A Scene LFO 3 Rate", 0)).toMatchObject({ connector: "lfo.rate", index: 8 });
     expect(find("FX S2 FX Type", -1)).toMatchObject({ connector: "fx.type", index: 5 });
     expect(find("Character", -1)).toMatchObject({ connector: "global.character" });
     expect(() => bindSurgeParameters([...parameters, { ...parameters[0], parameterId: 99999, name: "Unmapped" }], skin.connectors)).toThrow(/connector/);

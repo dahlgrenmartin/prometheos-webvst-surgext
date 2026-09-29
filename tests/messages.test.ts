@@ -90,7 +90,7 @@ describe.skipIf(!existsSync(archiveUrl))("Surge DSP messages (webvst-ext-message
 
   it("reports live names and value text, and parses typed values without changing the patch", () => {
     const dsp = instantiate(module);
-    const cutoff = id("Filter 1 Cutoff");
+    const cutoff = id("A Filter 1 Cutoff");
     const info = dsp.message({ type: "paramInfo", ids: [cutoff, id("FX A1 Param 1")] }).params;
     expect(info[0]).toMatchObject({ id: cutoff, name: "Cutoff" });
     expect(info[0].display).toMatch(/Hz/);
@@ -104,7 +104,7 @@ describe.skipIf(!existsSync(archiveUrl))("Surge DSP messages (webvst-ext-message
 
   it("names the current filter type's subtypes", () => {
     const dsp = instantiate(module);
-    const type = params.find((p: any) => p.name === "Filter 1 Type");
+    const type = params.find((p: any) => p.name === "A Filter 1 Type");
     expect(dsp.message({ type: "filterSubtypes", scene: 0, unit: 0 }).count).toBe(0); // "Off" in the init patch
     dsp.exports.webvst_param_set(dsp.handle, type.parameterId, 1 / type.stepCount); // "LP 12 dB"
     const reply = dsp.message({ type: "filterSubtypes", scene: 0, unit: 0 });
@@ -127,7 +127,7 @@ describe.skipIf(!existsSync(archiveUrl))("Surge DSP messages (webvst-ext-message
 
   it("edits modulation routings through Surge's own API, and the state keeps them", () => {
     const dsp = instantiate(module);
-    const cutoff = id("Filter 1 Cutoff");
+    const cutoff = id("A Filter 1 Cutoff");
     const LFO1 = 17;
     const set = dsp.message({ type: "setModulation", target: cutoff, source: LFO1, sourceScene: 0, index: 0, depth: 0.25 });
     expect(set).toMatchObject({ active: true });
@@ -147,8 +147,8 @@ describe.skipIf(!existsSync(archiveUrl))("Surge DSP messages (webvst-ext-message
     const noteEnvelopes = (triggerMode: number) => {
       const dsp = instantiate(module);
       const { exports: x, handle } = dsp;
-      x.webvst_param_set(handle, id("LFO 1 Trigger Mode"), triggerMode);
-      dsp.message({ type: "setModulation", target: id("Volume"), source: 17, sourceScene: 0, index: 0, depth: -1 });
+      x.webvst_param_set(handle, id("A LFO 1 Trigger Mode"), triggerMode);
+      dsp.message({ type: "setModulation", target: id("A Volume"), source: 17, sourceScene: 0, index: 0, depth: -1 });
       const out = x.malloc(128 * 2 * 4);
       const run = (blocks: number) => {
         const rms: number[] = [];

@@ -9,6 +9,16 @@ export interface UiNode {
 }
 export interface ParameterGroup { id: string; label: string; zone: string; parameters: SurgeParameter[] }
 
+/**
+ * The adapter titles every scene parameter "A …" or "B …" (Surge's full names omit
+ * the scene). Splits a title into its scene (-1 global, 0 A, 1 B) and the scene-local
+ * name the layout rules match on.
+ */
+export function splitScene(name: string): { scene: -1 | 0 | 1; base: string } {
+  const m = /^([AB]) (.+)$/.exec(name);
+  return m ? { scene: m[1] === "A" ? 0 : 1, base: m[2]! } : { scene: -1, base: name };
+}
+
 export function groupSurgeParameters(input: readonly SurgeParameter[]): ParameterGroup[] {
   const parameters = [...input].sort((a, b) => a.parameterId - b.parameterId);
   const ids = new Set<number>();
@@ -18,24 +28,21 @@ export function groupSurgeParameters(input: readonly SurgeParameter[]): Paramete
     if (ids.has(p.parameterId)) throw new Error(`Duplicate parameter ID: ${p.parameterId}`);
     ids.add(p.parameterId);
   }
-  // Surge's probe exposes scene-local names twice. The two Octave anchors delimit
-  // the scene blocks in stable DSP-ID order; no guessed parameter-ID offsets.
-  const anchors = parameters.filter(p => p.name === "Octave").map(p => p.parameterId);
-  if (anchors.length !== 0 && anchors.length !== 2) throw new Error("Expected two probed Surge scene anchors");
   const groups = new Map<string, ParameterGroup>();
   for (const p of parameters) {
     let key = "global", label = "Global / Output", zone = "global";
+    const { scene: sceneIndex, base } = splitScene(p.name);
     if (/^FX /.test(p.name)) { key = "effects"; label = "Effects / Routing"; zone = "effects"; }
-    else if (anchors.length === 2 && p.parameterId >= anchors[0] && p.name !== "Character") {
-      const scene = p.parameterId >= anchors[1] ? "b" : "a";
+    else if (sceneIndex >= 0) {
+      const scene = sceneIndex === 1 ? "b" : "a";
       let section = "scene", title = "Scene / Play Mode"; zone = "scene";
-      const osc = /^Osc ([123]) /.exec(p.name);
-      const lfo = /^(Scene )?LFO ([1-6]) /.exec(p.name);
+      const osc = /^Osc ([123]) /.exec(base);
+      const lfo = /^(Scene )?LFO ([1-6]) /.exec(base);
       if (lfo) { section = `${lfo[1] ? "scene-" : ""}lfo-${lfo[2]}`; title = `${lfo[1] ?? ""}LFO ${lfo[2]}`; zone = "modulation"; }
-      else if (/^Amp EG /.test(p.name)) { section = "amp-eg"; title = "Amp EG"; zone = "envelopes"; }
-      else if (/^Filter EG /.test(p.name)) { section = "filter-eg"; title = "Filter EG"; zone = "envelopes"; }
-      else if (/^(Filter |Waveshaper |Highpass|Feedback|Link Resonance)/.test(p.name)) { section = "filter"; title = "Filters / Waveshaper"; zone = "filter"; }
-      else if (/^(Ring Modulation |Noise (Volume|Mute|Solo|Route)|Pre-Filter|VCA |Velocity >)/.test(p.name) || (osc && / (Volume|Mute|Solo|Route)$/.test(p.name))) {
+      else if (/^Amp EG /.test(base)) { section = "amp-eg"; title = "Amp EG"; zone = "envelopes"; }
+      else if (/^Filter EG /.test(base)) { section = "filter-eg"; title = "Filter EG"; zone = "envelopes"; }
+      else if (/^(Filter |Waveshaper |Highpass|Feedback|Link Resonance)/.test(base)) { section = "filter"; title = "Filters / Waveshaper"; zone = "filter"; }
+      else if (/^(Ring Modulation |Noise (Volume|Mute|Solo|Route)|Pre-Filter|VCA |Velocity >)/.test(base) || (osc && / (Volume|Mute|Solo|Route)$/.test(base))) {
         section = "mixer"; title = "Mixer / Amplifier"; zone = "mixer";
       } else if (osc) { section = `osc-${osc[1]}`; title = `Oscillator ${osc[1]}`; zone = "oscillators"; }
       key = `scene-${scene}-${section}`; label = `Scene ${scene.toUpperCase()} / ${title}`;
@@ -274,12 +281,9 @@ function connectorFor(name: string, scoped: boolean): { connector: string; index
 export function bindSurgeParameters(parameters: readonly SurgeParameter[], connectors: ReadonlyMap<string, SkinConnector>): SurgeBinding[] {
   const sorted = [...parameters].sort((a, b) => a.parameterId - b.parameterId);
   groupSurgeParameters(sorted); // shared ID validation
-  const anchors = sorted.filter(p => p.name === "Octave").map(p => p.parameterId);
-  if (anchors.length !== 2) throw new Error("Expected two probed Surge scene anchors");
   return sorted.map(parameter => {
-    // Character is global although Surge numbers it after both scenes.
-    const scene = GLOBAL[parameter.name] ? -1 : parameter.parameterId >= anchors[1] ? 1 : parameter.parameterId >= anchors[0] ? 0 : -1;
-    const target = connectorFor(parameter.name, scene >= 0);
+    const { scene, base } = splitScene(parameter.name);
+    const target = connectorFor(base, scene >= 0);
     if (!target) throw new Error(`No upstream skin connector for parameter ${parameter.parameterId} "${parameter.name}"`);
     if (!connectors.has(target.connector)) throw new Error(`Upstream skin has no connector ${target.connector}`);
     return { parameter, connector: target.connector, scene, index: target.index };

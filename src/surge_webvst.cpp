@@ -249,12 +249,6 @@ uint32_t paramStepCount(const Parameter *p)
 }
 
 /**
- * A title every host can show. Surge's full name carries the control group
- * ("A Osc 1 Pitch"), which disambiguates the many same-named parameters across
- * scenes and slots; the shorter display name and the internal name are
- * fallbacks so no parameter is ever unnamed.
- */
-/**
  * FX slot parameters are `ct_none` placeholders until an effect is loaded into
  * the slot, and their meaning changes with the effect type. They are still real,
  * stable IDs the synth accepts values for, so they are exposed as generic
@@ -273,18 +267,31 @@ bool fxSlotParam(const Parameter *p, int &slot, int &index)
     return false;
 }
 
+/**
+ * A title every host can show, unique across the patch. Surge's full name carries
+ * the control group ("Osc 1 Pitch") but not the scene, so each scene parameter is
+ * prefixed "A " or "B " the way Surge's own scene switch labels them; without it
+ * hosts list two identical "Filter 1 Cutoff" entries. The shorter display name and
+ * the internal name are fallbacks so no parameter is ever unnamed.
+ */
 std::string paramTitle(const Parameter *p)
 {
     int slot = 0, index = 0;
     if (p->ctrltype == ct_none && fxSlotParam(p, slot, index))
         return std::string("FX ") + kFxSlotCodes[slot] + " Param " + std::to_string(index + 1);
+    std::string title = "Parameter " + std::to_string(p->id);
     const char *candidates[] = {p->get_full_name(), p->get_name(), p->get_internal_name()};
     for (const char *candidate : candidates)
     {
         if (candidate != nullptr && candidate[0] != '\0')
-            return std::string(candidate);
+        {
+            title = candidate;
+            break;
+        }
     }
-    return "Parameter " + std::to_string(p->id);
+    if (p->scene == 1 || p->scene == 2)
+        return std::string(p->scene == 1 ? "A " : "B ") + title;
+    return title;
 }
 
 // ---------------------------------------------------------------------------

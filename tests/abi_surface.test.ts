@@ -401,6 +401,20 @@ describe("Surge XT WebVST ABI v1 surface", () => {
     expect(abi.fn("webvst_class_param_title_write")(0, count, 0, 0)).toBe(WEBVST_ERROR_ARGUMENT);
   });
 
+  it("gives every parameter a distinct title, naming the scene of scene parameters", () => {
+    // Hosts list parameters by title; Surge's two scenes share every scene-local name, so
+    // without the scene a host shows two identical "Filter 1 Cutoff" entries.
+    const abi = instantiate();
+    const count = abi.fn("webvst_class_param_count")(0) >>> 0;
+    const titles = Array.from({ length: count }, (_, index) => paramTitle(abi, index));
+    const repeated = titles.filter((title, index) => titles.indexOf(title) !== index);
+    expect(repeated).toEqual([]);
+    expect(titles).toContain("A Filter 1 Cutoff");
+    expect(titles).toContain("B Filter 1 Cutoff");
+    expect(titles).toContain("A Octave");
+    expect(titles).toContain("Character"); // global despite its position after both scenes
+  });
+
   it("renders value text for both ends of a discrete parameter", () => {
     const abi = instantiate();
     const count = abi.fn("webvst_class_param_count")(0) >>> 0;
