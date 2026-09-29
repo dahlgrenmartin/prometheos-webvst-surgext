@@ -91,7 +91,7 @@ Run:
 cmake -DLOCK="$PWD/toolchains/wasi-sdk.lock" -DARCHIVE="$WASI_SDK_ARCHIVE" -P cmake/VerifyWasiSdk.cmake
 ```
 
-Expected: exits 0 and prints `Verified wasi-sdk-33`.
+Expected: exits 0 and prints `Verified wasi-sdk-34`.
 
 - [ ] **Step 4: Write the failing WASM contract test**
 
@@ -332,7 +332,7 @@ std::make_unique<SurgeSynthesizer>(nullptr, (<bundle-root> / "resources").string
 
 Do not search `HOME`, developer paths, or native install locations for factory data.
 
-Before construction under WASI, provide deterministic writable defaults without overriding host-provided values: `HOME=/var` and `PATH=/usr/bin`. The generic-host smoke test must mount a writable `/var`; native tests point `HOME` at a temporary writable directory.
+Before construction under WASI, provide deterministic environment defaults without overriding host-provided values: `HOME=/` and `PATH=/usr/bin`. This matches the proven WebVST workaround for Surge's path initialization. Do not require a writable user directory for v1; Surge's own user-directory creation failures are non-fatal, and all required factory content comes from the read-only bundle resource root.
 
 For native tests, `ClapTestHost` passes the staged bundle path explicitly.
 
@@ -755,7 +755,7 @@ git commit -m "test: lock WCLAP surface and reproducibility"
 - Consumes: `dist/SurgeXT.wclap`
 - Consumes generic host API:
   - `wclap_global_init(unsigned int)`
-  - `wclap_open_with_dirs(...)`
+  - `wclap_open(...)`
   - `wclap_get_error(...)`
   - `wclap_get_factory(...)`
   - `wclap_close(...)`
@@ -773,8 +773,10 @@ git commit -m "test: lock WCLAP surface and reproducibility"
 7. send one note-on and render 128 frames;
 8. assert at least one output sample is non-zero and finite;
 9. change one exposed parameter through CLAP, save state, mutate, restore, and verify the restored value;
-10. obtain the preset-discovery factory and verify at least one factory preset can be indexed;
+10. provide a non-default tempo/transport position and verify processing remains valid across the callback;
 11. stop/deactivate/destroy, close the WCLAP, and call `wclap_global_deinit()`.
+
+Preset discovery is not asserted through `wclap-bridge`: at the pinned bridge revision, `wclap_get_factory()` forwards only the ordinary CLAP plugin factory. Task 6 directly tests the product's preset-discovery factory instead of treating this host limitation as a product failure.
 
 No call in this test may include a Surge-specific ABI or WebVST function.
 
@@ -872,7 +874,8 @@ Record in the final PR description:
 - `dist/SurgeXT.wclap/module.wasm` SHA-256;
 - parameter count;
 - number of discovered factory presets;
-- confirmation that `wclap-bridge` smoke rendered non-silent audio;
+- confirmation that `wclap-bridge` smoke rendered non-silent audio and exercised params/state/transport;
+- preset-discovery count from the direct CLAP preset-discovery test;
 - confirmation that no forbidden runtime surfaces were detected.
 
 - [ ] **Step 3: Finish README and provenance**
