@@ -17,7 +17,7 @@
 - CLAP headers pin: `a47f6badb49d948fd009998f28309cdab78979c9`.
 - Canonical toolchain release: `wasi-sdk-34`; the Linux x86_64 release artifact SHA-256 must be recorded in `toolchains/wasi-sdk.lock` and verified before use.
 - WCLAP output architecture: `wasm32`, reactor style, no `main()`.
-- Product module is built with `-mexec-model=reactor` and exports `_initialize`, `clap_entry`, exactly one growable function table, exported growable memory, and `malloc()`.
+- Product module is built with `-mexec-model=reactor` and links with `--export-table,--growable-table`; it exports `_initialize`, `clap_entry`, exactly one growable function table, exported growable memory, and `malloc()`.
 - Product memory envelope: 128 MiB initial memory, 2 GiB maximum memory, 5 MiB stack.
 - Product bundle path: `dist/SurgeXT.wclap/module.wasm`.
 - Plugin ID: `org.surge-synth-team.surge-xt`.
@@ -138,10 +138,10 @@ Use official CLAP headers directly. Do not introduce a CLAP wrapper/helper libra
 
 ```text
 -mexec-model=reactor
---no-entry
 --export=clap_entry
 --export=malloc
 --export-table
+--growable-table
 --export-memory
 --initial-memory=134217728
 --max-memory=2147483648
