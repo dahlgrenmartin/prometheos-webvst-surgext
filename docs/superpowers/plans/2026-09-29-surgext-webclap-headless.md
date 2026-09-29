@@ -410,6 +410,8 @@ The test must enumerate every reported parameter and assert:
 
 Also assert value-to-text for one continuous, one integer, and one boolean parameter matches Surge's own display string for the same normalized value.
 
+Build a synthetic `CLAP_EVENT_PARAM_VALUE`, pass it through `clap.params.flush`, and assert `get_value` returns the new normalized value without requiring an audio process callback.
+
 Run:
 
 ```bash
@@ -507,6 +509,8 @@ Assert:
 - all renders have the same total frame count;
 - each render matches the 32-frame-reference render within the same floating-point tolerance.
 
+Add two defensive cases: a zero-frame process call must return without changing `blockPos_`, and a call with `frames_count > maxFrames` or no valid stereo `data32` output must return `CLAP_PROCESS_ERROR` without trapping or advancing the engine.
+
 Run:
 
 ```bash
@@ -548,7 +552,7 @@ Reject/ignore events whose `space_id` is not `CLAP_CORE_EVENT_SPACE_ID` or whose
 
 Ignore unsupported core/non-core events safely.
 
-Do not implement param modulation or note expression in v1.
+Do not implement param modulation or note expression in v1. The realtime path must use only pre-existing plugin/Surge storage: no filesystem calls, no vector growth, no heap allocation, and no exception may leave `process()`.
 
 - [ ] **Step 4: Write failing transport tests**
 
