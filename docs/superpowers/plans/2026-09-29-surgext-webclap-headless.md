@@ -17,7 +17,7 @@
 - CLAP headers pin: `a47f6badb49d948fd009998f28309cdab78979c9`.
 - Canonical toolchain release: `wasi-sdk-34`; the Linux x86_64 release artifact SHA-256 must be recorded in `toolchains/wasi-sdk.lock` and verified before use.
 - WCLAP output architecture: `wasm32`, reactor style, no `main()`.
-- Product module exports `clap_entry`, exactly one growable function table, exported growable memory, and `malloc()`.
+- Product module is built with `-mexec-model=reactor` and exports `_initialize`, `clap_entry`, exactly one growable function table, exported growable memory, and `malloc()`.
 - Product memory envelope: 128 MiB initial memory, 2 GiB maximum memory, 5 MiB stack.
 - Product bundle path: `dist/SurgeXT.wclap/module.wasm`.
 - Plugin ID: `org.surge-synth-team.surge-xt`.
@@ -98,14 +98,15 @@ Expected: exits 0 and prints `Verified wasi-sdk-33`.
 `tests/wasm_contract.test.mjs` must assert:
 
 ```js
-assert(exports.some(e => e.name === "clap_entry"));
+assert(exports.some(e => e.name === "_initialize" && e.kind === "function"));
+assert(exports.some(e => e.name === "clap_entry" && e.kind === "global"));
 assert.equal(exports.filter(e => e.kind === "table").length, 1);
-assert(exports.some(e => e.kind === "memory"));
-assert(exports.some(e => e.name === "malloc"));
+assert.equal(exports.filter(e => e.kind === "memory").length, 1);
+assert(exports.some(e => e.name === "malloc" && e.kind === "function"));
 assert(!exports.some(e => e.name === "_start" || e.name === "main" || e.name === "_main"));
 ```
 
-It must instantiate the module with stubbed WASI imports, obtain the exported table, call `table.grow(1)`, and assert that growth succeeds.
+It must instantiate the module with stubbed WASI imports, assert that the exported `clap_entry` global has a non-zero integer value, call `table.grow(1)` on the sole exported function table, call `memory.grow(1)` on the sole exported memory, and assert both growth operations succeed.
 
 Run:
 
@@ -129,13 +130,14 @@ public:
 
 In `src/SurgeClapPlugin.cpp`, define the CLAP descriptor, plugin factory enumeration, `clap_entry.init/deinit/get_factory`, and a temporary factory `create_plugin` that returns `nullptr` until Task 3.
 
-Use official CLAP headers directly. Do not introduce a CLAP wrapper/helper library.
+Use official CLAP headers directly. Do not introduce a CLAP wrapper/helper library. Build the WASI target with `-mexec-model=reactor`; keep `_initialize` as the WASI reactor initializer and do not add `main()`.
 
 - [ ] **Step 6: Add the wasi-sdk reactor link surface**
 
 `CMakeLists.txt`/ `cmake/wasi-sdk.cmake` must use these product link properties:
 
 ```text
+-mexec-model=reactor
 --no-entry
 --export=clap_entry
 --export=malloc
@@ -225,7 +227,7 @@ SURGE_COMPILE_BLOCK_SIZE=32
 SURGE_BUILD_32BIT_LINUX=ON
 ```
 
-Link the product only to `surge::surge-common` and dependencies transitively required by that target.
+Link the product only to `surge::surge-common` and dependencies transitively required by that target. Compile the WASI product with `-fwasm-exceptions` so C++ construction/filesystem failures can be caught at CLAP ABI boundaries; no exception may escape a CLAP callback or occur intentionally on the realtime path.
 
 - [ ] **Step 3: Re-evaluate the three existing portability patch classes under WASI**
 
@@ -241,7 +243,7 @@ No Emscripten-specific preprocessor branch may be copied as-is.
 
 `cmake/PackageWclap.cmake` must copy the complete contents of pinned Surge `resources/data/` to `dist/SurgeXT.wclap/resources/` without rewriting filenames or contents.
 
-Do not package fonts, skins, JUCE editor assets, or other GUI-only trees outside `resources/data`.
+Do not add any resource tree outside pinned `resources/data`. Copy that directory verbatim—even if it contains inert upstream skin data—rather than inventing a custom resource-curation layer for v1.
 
 - [ ] **Step 5: Build and run the package-surface test**
 
@@ -529,11 +531,11 @@ For each host frame:
 5. increment `blockPos_` modulo 32.
 
 Supported core events:
-- `CLAP_EVENT_NOTE_ON`
-- `CLAP_EVENT_NOTE_OFF`
-- `CLAP_EVENT_NOTE_CHOKE`
-- `CLAP_EVENT_MIDI`
-- `CLAP_EVENT_PARAM_VALUE`
+- `CLAP_EVENT_NOTE_ON`: call `playNote(channel, key, round(127 * velocity), 0, note_id)`; velocity zero is a release.
+- `CLAP_EVENT_NOTE_OFF`: call `releaseNote(channel, key, round(127 * velocity), note_id)`.
+- `CLAP_EVENT_NOTE_CHOKE`: call `chokeNote(channel, key, round(127 * velocity), note_id)`.
+- `CLAP_EVENT_MIDI`: parse the status byte directly, with 0-based channel, and map note on/off, channel pressure, poly pressure, pitch wheel (14-bit value minus 8192), controller, and program change to the corresponding `SurgeSynthesizer` methods used by pinned upstream `applyMidi()`; do not use JUCE MIDI classes.
+- `CLAP_EVENT_PARAM_VALUE`: clamp finite values to `[0,1]` and call `setParameter01(param_id, value, true)` for a valid engine ID.
 
 Reject/ignore events whose `space_id` is not `CLAP_CORE_EVENT_SPACE_ID` or whose `header.time >= process->frames_count`. A zero-frame process call is valid: return without changing `blockPos_` or transport.
 
